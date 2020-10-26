@@ -1,5 +1,6 @@
 // Lists of extension features
 PER_EXTENSION(sparse)      // Sparse data structures
+PER_EXTENSION(pointer)     // `pointer` sparse data structure
 PER_EXTENSION(async_mode)  // Asynchronous execution mode
 PER_EXTENSION(quant)       // Quantization
 PER_EXTENSION(data64)      // Metal doesn't support 64-bit data buffers yet...

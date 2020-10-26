@@ -1,7 +1,7 @@
 import taichi as ti
 
 
-@ti.test(require=ti.extension.sparse)
+@ti.test(require=ti.extension.pointer)
 def test_pointer():
     x = ti.field(ti.f32)
     s = ti.field(ti.i32, shape=())
@@ -33,7 +33,7 @@ def test_pointer():
     assert s[None] == 16
 
 
-@ti.test(require=ti.extension.sparse)
+@ti.test(require=ti.extension.pointer)
 def test_pointer1():
     x = ti.field(ti.f32)
     s = ti.field(ti.i32)
@@ -68,7 +68,7 @@ def test_pointer1():
     assert s[None] == 32
 
 
-@ti.test(require=ti.extension.sparse)
+@ti.test(require=ti.extension.pointer)
 def test_pointer2():
     x = ti.field(ti.f32)
 
@@ -106,7 +106,7 @@ def test_pointer2():
             assert x[i] == 10.0
 
 
-@ti.test(require=ti.extension.sparse)
+@ti.test(require=ti.extension.pointer)
 def test_pointer3():
     x = ti.field(ti.f32)
     x_temp = ti.field(ti.f32)
@@ -156,16 +156,19 @@ def test_pointer3():
     fill2()
     clear_temp()
 
-    for iter in range(100):
+    for itr in range(100):
+        if itr % 10 == 0:
+            print('test itr=', itr)
         copy_to_temp()
         clear()
         copy_from_temp()
         clear_temp()
 
+        xn = x.to_numpy()
         for j in range(n * n):
             for i in range(n * n):
                 if i + j < 100:
-                    assert x[i, j] == i + j
+                    assert xn[i, j] == i + j
 
 
 @ti.test(require=ti.extension.sparse)

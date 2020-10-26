@@ -61,6 +61,9 @@ class KernelManager {
 
   PrintStringTable *print_strtable();
 
+  // For debugging purpose
+  std::size_t get_snode_num_dynamically_allocated(SNode* snode);
+
  private:
   // Use Pimpl so that we can expose this interface without conditionally
   // compiling on TI_PLATFORM_OSX

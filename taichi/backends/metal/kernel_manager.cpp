@@ -1145,6 +1145,11 @@ class KernelManager::Impl {
     TI_ERROR("Metal not supported on the current OS");
     return nullptr;
   }
+
+  std::size_t get_snode_num_dynamically_allocated(SNode *) {
+    TI_ERROR("Metal not supported on the current OS");
+    return 0;
+  }
 };
 
 #endif  // TI_PLATFORM_OSX
@@ -1176,6 +1181,10 @@ void KernelManager::synchronize() {
 
 PrintStringTable *KernelManager::print_strtable() {
   return impl_->print_strtable();
+}
+
+std::size_t KernelManager::get_snode_num_dynamically_allocated(SNode *snode) {
+  return impl_->get_snode_num_dynamically_allocated(snode);
 }
 
 }  // namespace metal

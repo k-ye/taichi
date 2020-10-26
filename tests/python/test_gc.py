@@ -1,7 +1,6 @@
 import taichi as ti
 
 
-@ti.test(require=ti.extension.sparse)
 def _test_block_gc():
     N = 100000
 
@@ -52,12 +51,12 @@ def _test_block_gc():
     assert 1 <= grid.num_dynamically_allocated <= 2, grid.num_dynamically_allocated
 
 
-@ti.test(require=ti.extension.sparse)
+@ti.test(require=ti.extension.pointer)
 def test_block():
     _test_block_gc()
 
 
-@ti.test(require=[ti.extension.sparse, ti.extension.async_mode],
+@ti.test(require=[ti.extension.pointer, ti.extension.async_mode],
          async_mode=True)
 def test_block_async():
     _test_block_gc()
@@ -78,7 +77,7 @@ def test_dynamic_gc():
         assert L.num_dynamically_allocated <= 2
 
 
-@ti.test(require=ti.extension.sparse)
+@ti.test(require=ti.extension.pointer)
 def test_pointer_gc():
     x = ti.field(dtype=ti.i32)
 
@@ -87,7 +86,7 @@ def test_pointer_gc():
 
     assert L.num_dynamically_allocated == 0
 
-    for i in range(1024):
+    for i in range(100):
         x[i * 8, i * 8] = 1
         assert L.num_dynamically_allocated == 1
         L.deactivate_all()
@@ -96,7 +95,7 @@ def test_pointer_gc():
         assert L.num_dynamically_allocated == 1
 
 
-@ti.test(require=[ti.extension.sparse, ti.extension.async_mode],
+@ti.test(require=[ti.extension.pointer, ti.extension.async_mode],
          async_mode=True)
 def test_fuse_allocator_state():
     N = 16
