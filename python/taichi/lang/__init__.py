@@ -40,7 +40,8 @@ cuda = core.cuda
 metal = core.metal
 opengl = core.opengl
 cc = core.cc
-gpu = [cuda, metal, opengl]
+vulkan = core.vulkan
+gpu = [cuda, metal, opengl, vulkan]
 cpu = core.host_arch()
 kernel_profiler_print = lambda: get_runtime().prog.kernel_profiler_print()
 kernel_profiler_clear = lambda: get_runtime().prog.kernel_profiler_clear()
@@ -539,7 +540,8 @@ def is_arch_supported(arch):
         metal: core.with_metal,
         opengl: core.with_opengl,
         cc: core.with_cc,
-        cpu: lambda: True
+        cpu: lambda: True,
+        vulkan: lambda: True,
     }
     with_arch = arch_table.get(arch, lambda: False)
     try:

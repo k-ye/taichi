@@ -4,6 +4,7 @@ option(USE_STDCPP "Use -stdlib=libc++" OFF)
 option(TI_WITH_CUDA "Build with the CUDA backend" ON)
 option(TI_WITH_OPENGL "Build with the OpenGL backend" ON)
 option(TI_WITH_CC "Build with the C backend" ON)
+option(TI_WITH_VULKAN "Build with the Vulkan backend" ON)
 
 if (APPLE)
     if (TI_WITH_CUDA)
@@ -43,6 +44,7 @@ file(GLOB TAICHI_CUDA_SOURCE "taichi/backends/cuda/*.cpp" "taichi/backends/cuda/
 file(GLOB TAICHI_METAL_SOURCE "taichi/backends/metal/*.h" "taichi/backends/metal/*.cpp" "taichi/backends/metal/shaders/*")
 file(GLOB TAICHI_OPENGL_SOURCE "taichi/backends/opengl/*.h" "taichi/backends/opengl/*.cpp" "taichi/backends/opengl/shaders/*")
 file(GLOB TAICHI_CC_SOURCE "taichi/backends/cc/*.h" "taichi/backends/cc/*.cpp")
+file(GLOB TAICHI_VULKAN_SOURCE "taichi/backends/vulkan/*.h" "taichi/backends/vulkan/*.cpp")
 
 list(REMOVE_ITEM TAICHI_CORE_SOURCE ${TAICHI_BACKEND_SOURCE})
 
@@ -102,6 +104,26 @@ file(GLOB TAICHI_TESTABLE_SRC
       "taichi/system/timer.*"
       "taichi/system/profiler.*"
 )
+
+if (TI_WITH_VULKAN)
+  # https://github.com/PacktPublishing/Learning-Vulkan/blob/master/Chapter%2003/HandShake/CMakeLists.txt
+  find_package(Vulkan)
+  if (NOT Vulkan_FOUND)
+    message(ERROR "Vulkan not found")
+  endif()
+  
+  get_filename_component(Vulkan_PATH ${Vulkan_INCLUDE_DIRS} DIRECTORY)
+  message(STATUS "Vulkan found! ")
+  message(STATUS "Vulkan_INCLUDE_DIRS=${Vulkan_INCLUDE_DIRS}")
+  message(STATUS "Vulkan_LIBRARIES=${Vulkan_LIBRARIES}")
+  message(STATUS "Vulkan_PATH=${Vulkan_PATH}")
+
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTI_WITH_VULKAN")
+  list(APPEND TAICHI_CORE_SOURCE ${TAICHI_VULKAN_SOURCE})
+  
+  include_directories(${Vulkan_INCLUDE_DIRS})
+  link_directories(${Vulkan_PATH}/Lib)
+endif()
 
 # TODO(#2196): Maybe we can do the following renaming in the end?
 # taichi_core --> taichi_pylib (this requires python-side refactoring...)
@@ -181,6 +203,10 @@ if (TI_WITH_CUDA)
     llvm_map_components_to_libnames(llvm_ptx_libs NVPTX)
     target_link_libraries(${LIBRARY_NAME} ${llvm_ptx_libs})
 endif()
+
+if (TI_WITH_VULKAN)
+    target_link_libraries(${CORE_LIBRARY_NAME} vulkan-1)
+endif ()
 
 # Optional dependencies
 
