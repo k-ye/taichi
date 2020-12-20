@@ -53,7 +53,8 @@ cuda = _ti_core.cuda
 metal = _ti_core.metal
 opengl = _ti_core.opengl
 cc = _ti_core.cc
-gpu = [cuda, metal, opengl]
+vulkan = _ti_core.vulkan
+gpu = [cuda, metal, opengl, vulkan]
 cpu = _ti_core.host_arch()
 kernel_profiler_print = lambda: impl.get_runtime().prog.kernel_profiler_print()
 kernel_profiler_clear = lambda: impl.get_runtime().prog.kernel_profiler_clear()
@@ -541,11 +542,20 @@ def stat_write(key, value):
 
 def is_arch_supported(arch):
     arch_table = {
+<<<<<<< HEAD
         cuda: _ti_core.with_cuda,
         metal: _ti_core.with_metal,
         opengl: _ti_core.with_opengl,
         cc: _ti_core.with_cc,
         cpu: lambda: True
+=======
+        cuda: core.with_cuda,
+        metal: core.with_metal,
+        opengl: core.with_opengl,
+        cc: core.with_cc,
+        cpu: lambda: True,
+        vulkan: lambda: True,
+>>>>>>> basic code
     }
     with_arch = arch_table.get(arch, lambda: False)
     try:

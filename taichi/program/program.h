@@ -22,6 +22,7 @@
 #include "taichi/program/context.h"
 #include "taichi/runtime/runtime.h"
 #include "taichi/backends/metal/struct_metal.h"
+#include "taichi/backends/vulkan/snode_struct_compiler.h"
 #include "taichi/system/memory_pool.h"
 #include "taichi/system/threading.h"
 #include "taichi/system/unified_allocator.h"
@@ -296,6 +297,8 @@ class Program {
   // SNode information that requires using Program.
   SNodeGlobalVarExprMap snode_to_glb_var_exprs_;
   SNodeRwAccessorsBank snode_rw_accessors_bank_;
+  // Vulkan related data structures
+  std::optional<vulkan::CompiledSNodeStructs> vulkan_compiled_structs_;
 
  public:
 #ifdef TI_WITH_CC

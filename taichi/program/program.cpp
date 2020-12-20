@@ -32,6 +32,10 @@
 #include "taichi/backends/cc/cc_layout.h"
 #include "taichi/backends/cc/codegen_cc.h"
 #endif
+#ifdef TI_WITH_VULKAN
+#include "taichi/backends/vulkan/snode_struct_compiler.h"
+#include "taichi/backends/vulkan/codegen_vulkan.h"
+#endif
 
 #if defined(TI_ARCH_x64)
 // For _MM_SET_FLUSH_ZERO_MODE
@@ -243,6 +247,10 @@ FunctionType Program::compile(Kernel &kernel) {
   } else if (kernel.arch == Arch::cc) {
     ret = cccp::compile_kernel(&kernel);
 #endif
+  } else if (kernel.arch == Arch::vulkan) {
+    vulkan::lower(&kernel);
+    ret = vulkan::compile_to_executable(&kernel,
+                                        &vulkan_compiled_structs_.value());
   } else {
     TI_NOT_IMPLEMENTED;
   }
@@ -444,6 +452,9 @@ void Program::materialize_layout() {
     result_buffer = allocate_result_buffer_default(this);
     cc_program->compile_layout(snode_root.get());
 #endif
+  } else if (config.arch == Arch::vulkan) {
+    result_buffer = allocate_result_buffer_default(this);
+    vulkan_compiled_structs_ = vulkan::compile_snode_structs(*snode_root);
   }
 }
 
