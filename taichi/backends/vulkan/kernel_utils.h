@@ -111,16 +111,35 @@ class KernelContextAttributes {
     return !(has_args() || has_rets());
   }
 
-  // Total size in bytes of the input args and return values
-  inline size_t ctx_bytes() const {
-    return ctx_bytes_;
+  inline size_t args_bytes() const {
+    return args_bytes_;
   }
+
+  inline size_t rets_bytes() const {
+    return rets_bytes_;
+  }
+
+  inline size_t rets_mem_offset() const {
+    return args_bytes();
+  }
+
+  // Total size in bytes of the input args and return values,
+  // *excluding* the extra args bytes!
+  inline size_t ctx_bytes() const {
+    return args_bytes() + rets_bytes();
+  }
+
   inline size_t extra_args_bytes() const {
     return extra_args_bytes_;
   }
+
+  inline size_t extra_args_mem_offset() const {
+    return ctx_bytes();
+  }
+
   // Total bytes needed for allocating the Vulkan buffer
   inline size_t total_bytes() const {
-    return ctx_bytes_ + extra_args_bytes_;
+    return ctx_bytes() + extra_args_bytes();
   }
 
  private:
@@ -133,8 +152,9 @@ class KernelContextAttributes {
   //
   std::vector<ArgAttributes> arg_attribs_vec_;
   std::vector<RetAttributes> ret_attribs_vec_;
-  // Total size in bytes of the input args and return values
-  size_t ctx_bytes_;
+
+  size_t args_bytes_;
+  size_t rets_bytes_;
   size_t extra_args_bytes_;
 };
 

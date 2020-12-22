@@ -580,7 +580,7 @@ class VkRuntime ::Impl {
       TI_ASSERT_INFO(CheckValidationLayerSupport(),
                      "validation layers requested but not available");
     }
-    for (const auto &ext : GetAllExtensionProperties()) {
+    for (const auto &ext : GetInstanceExtensionProperties()) {
       std::cout << "ext=" << ext.extensionName << " spec=" << ext.specVersion
                 << std::endl;
     }

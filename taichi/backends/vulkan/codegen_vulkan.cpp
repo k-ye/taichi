@@ -195,7 +195,7 @@ class TaskCodegen : public IRVisitor {
          snode_descs.at(out_snode->id).mem_offset_in_parent_cell);
     if (out_snode->is_place()) {
       TI_ASSERT(ptr_to_buffers_.count(stmt) == 0);
-      ptr_to_buffers_[stmt] = kRootBufferName;
+      ptr_to_buffers_[stmt] = BuffersEnum::Root;
     }
   }
 
@@ -269,22 +269,82 @@ class TaskCodegen : public IRVisitor {
   }
 
   void visit(ArgLoadStmt *stmt) override {
-    const auto dt = stmt->element_type();
+    const auto arg_id = stmt->arg_id;
+    const auto &arg_attribs = ctx_attribs_->args()[arg_id];
+    const auto offset_in_mem = arg_attribs.offset_in_mem;
     if (stmt->is_ptr) {
-      emit("const int {} = {};", stmt->raw_name(), stmt->arg_id);
+      emit("// Pointer arg: id={} offset_in_mem={}", arg_id, offset_in_mem);
+      // Do not shift! We are indexing the buffers at byte granularity.
+      emit("const int {} = {};", stmt->raw_name(), offset_in_mem);
     } else {
-      const auto val_str =
-          fmt::format("{}[{}]", kContextBufferName, stmt->arg_id);
+      const auto dt = arg_attribs.dt;
+      const auto val_str = fmt::format("{}[{}]", kContextBufferName,
+                                       (offset_in_mem / sizeof(int32_t)));
+      emit("// Scalar arg: id={} offset_in_mem={}", arg_id, offset_in_mem);
       emit("const {} {} = {};", opengl_data_type_name(dt), stmt->raw_name(),
            load_from_int_bits(val_str, dt));
     }
   }
 
+  void visit(KernelReturnStmt *stmt) override {
+    // TODO: use stmt->ret_id instead of 0 as index
+    const auto &ret_attribs = ctx_attribs_->rets()[0];
+    const int index_in_buffer = ret_attribs.offset_in_mem / sizeof(int32_t);
+    emit("// Return value: offset_in_mem={}", ret_attribs.offset_in_mem);
+    emit("{}[{}] = {};", kContextBufferName, index_in_buffer,
+         store_as_int_bits(stmt->value->raw_name(), ret_attribs.dt));
+  }
+
   void visit(GlobalTemporaryStmt *stmt) override {
     TI_ASSERT(stmt->width() == 1);
-    const auto dt = metal_data_type_name(stmt->element_type().ptr_removed());
-    emit("device {}* {} = reinterpret_cast<device {}*>({} + {});", dt,
-         stmt->raw_name(), dt, kGlobalTmpsBufferName, stmt->offset);
+    const auto dt = opengl_data_type_name(stmt->element_type().ptr_removed());
+    emit("const int {} = {}", stmt->raw_name(), stmt->offset);
+    ptr_to_buffers_[stmt] = BuffersEnum::GlobalTmps;
+  }
+
+  void visit(ExternalPtrStmt *stmt) override {
+    // Used mostly for transferring data between host (e.g. numpy array) and
+    // Vulkan.
+    TI_ASSERT(stmt->width() == 1);
+    const auto linear_offset_name =
+        fmt::format("{}_linear_mem_offset_", stmt->raw_name());
+    emit("int {} = 0;", linear_offset_name);
+    emit("{{");
+    {
+      ScopedIndent s(current_appender());
+      const auto *argload = stmt->base_ptrs[0]->as<ArgLoadStmt>();
+      const int arg_id = argload->arg_id;
+      const int num_indices = stmt->indices.size();
+      std::vector<std::string> size_var_names;
+      const auto extra_args_mem_offset = ctx_attribs_->extra_args_mem_offset();
+      const auto extra_args_index_base =
+          (extra_args_mem_offset / sizeof(int32_t));
+      emit("// External ptr, extra args: mem_offset={} index_base={}",
+           extra_args_mem_offset, extra_args_index_base);
+      for (int i = 0; i < num_indices; i++) {
+        std::string var_name = fmt::format("{}_size{}_", stmt->raw_name(), i);
+        const auto extra_arg_linear_index_offset =
+            (arg_id * taichi_max_num_indices) + i;
+        const auto extra_arg_linear_index =
+            extra_args_index_base + extra_arg_linear_index_offset;
+        emit("// Extra arg: arg_id={} i={} linear_index=({} + {})={}", arg_id,
+             i, extra_args_index_base, extra_arg_linear_index_offset,
+             extra_arg_linear_index);
+        emit("const int {} = {}[{}];", var_name, kContextBufferName,
+             extra_arg_linear_index);
+        size_var_names.push_back(std::move(var_name));
+      }
+      for (int i = 0; i < num_indices; i++) {
+        emit("{} *= {};", linear_offset_name, size_var_names[i]);
+        emit("{} += {};", linear_offset_name, stmt->indices[i]->raw_name());
+      }
+      emit("// Convert index to bytes");
+      emit("{} = ({} << 2);", linear_offset_name, linear_offset_name);
+    }
+    emit("}}");
+    emit("const int {} = ({} + {});", stmt->raw_name(),
+         stmt->base_ptrs[0]->raw_name(), linear_offset_name);
+    ptr_to_buffers_[stmt] = BuffersEnum::Context;
   }
 
   void visit(UnaryOpStmt *stmt) override {
@@ -413,7 +473,9 @@ class TaskCodegen : public IRVisitor {
     std::string mem = at_buffer(stmt->dest, dt);
     if (dt->is_primitive(PrimitiveTypeID::f32)) {
       // Buffer has to be specified in the fatomicAdd helpers.
-      func = fmt::format("fatomicAdd_{}", ptr_to_buffers_.at(stmt->dest));
+      const std::string buffer_name =
+          buffer_instance_name(ptr_to_buffers_.at(stmt->dest));
+      func = fmt::format("fatomicAdd_{}", buffer_name);
       mem = vk_data_address_shifter(stmt->dest, dt);
     } else if (!is_integral(dt)) {
       TI_ERROR("Vulkan only supports 32-bit atomic data types");
@@ -571,17 +633,6 @@ class TaskCodegen : public IRVisitor {
     task_attribs_.advisory_num_threads_per_group = stmt->block_dim;
   }
 
-  std::string inject_load_global_tmp(int offset,
-                                     DataType dt = PrimitiveType::i32) {
-    const auto vt = TypeFactory::create_vector_or_scalar_type(1, dt);
-    auto gtmp = Stmt::make<GlobalTemporaryStmt>(offset, vt);
-    gtmp->accept(this);
-    auto gload = Stmt::make<GlobalLoadStmt>(gtmp.get());
-    gload->ret_type = vt;
-    gload->accept(this);
-    return gload->raw_name();
-  }
-
   void emit_single_work_func_def(const std::string &func_name,
 
                                  Block *func_ir) {
@@ -600,7 +651,8 @@ class TaskCodegen : public IRVisitor {
   }
 
   std::string at_buffer(const Stmt *ptr, DataType dt) const {
-    const auto &buffer_name = ptr_to_buffers_.at(ptr);
+    const std::string buffer_name =
+        buffer_instance_name(ptr_to_buffers_.at(ptr));
     return fmt::format("{}[{}]", buffer_name, vk_data_address_shifter(ptr, dt));
   }
 
@@ -639,6 +691,7 @@ class TaskCodegen : public IRVisitor {
 
   template <typename... Args>
   void emit(std::string f, Args &&... args) {
+    // TI_INFO(f, args...);
     current_appender().append(std::move(f), std::forward<Args>(args)...);
   }
 
@@ -661,7 +714,7 @@ class TaskCodegen : public IRVisitor {
 
   TaskAttributes task_attribs_;
   GetRootStmt *root_stmt_{nullptr};
-  std::unordered_map<const Stmt *, std::string> ptr_to_buffers_;
+  std::unordered_map<const Stmt *, BuffersEnum> ptr_to_buffers_;
   Section code_section_{Section::Kernels};
   std::unordered_map<Section, LineAppender> section_appenders_;
 };

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <shaderc/shaderc.hpp>
+#include <vector>
 #include <optional>
 #include <vector>
 
@@ -96,7 +98,20 @@ struct SpirvCodeView {
   }
 };
 
-std::vector<VkExtensionProperties> GetAllExtensionProperties();
+std::vector<VkExtensionProperties> GetInstanceExtensionProperties();
+
+std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
+    VkPhysicalDevice physicalDevice);
+
+class VulkanEnvSettings {
+  static constexpr uint32_t kApiVersion() {
+    return VK_API_VERSION_1_2;
+  }
+
+  static constexpr shaderc_env_version kShadercEnvVersion() {
+    return shaderc_env_version_vulkan_1_2;
+  }
+};
 
 }  // namespace vulkan
 TLANG_NAMESPACE_END
