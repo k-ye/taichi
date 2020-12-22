@@ -463,6 +463,7 @@ void Program::materialize_layout() {
     vulkan::VkRuntime::Params params;
     params.config = &config;
     params.snode_descriptors = &(vulkan_compiled_structs_->snode_descriptors);
+    params.host_result_buffer = result_buffer;
     vulkan_runtime_ = std::make_unique<vulkan::VkRuntime>(std::move(params));
   }
 }
@@ -533,6 +534,8 @@ void Program::device_synchronize() {
 #endif
   } else if (config.arch == Arch::metal) {
     metal_kernel_mgr_->synchronize();
+  } else if (config.arch == Arch::vulkan) {
+    vulkan_runtime_->synchronize();
   }
 }
 

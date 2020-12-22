@@ -150,7 +150,7 @@ class TaskCodegen : public IRVisitor {
   }
 
   void visit(AllocaStmt *alloca) override {
-    emit("{} {}(0);", opengl_data_type_name(alloca->element_type()),
+    emit("{} {} = 0;", opengl_data_type_name(alloca->element_type()),
          alloca->raw_name());
   }
 
@@ -165,7 +165,7 @@ class TaskCodegen : public IRVisitor {
     if (stmt->same_source() && linear_index &&
         stmt->width() == stmt->ptr[0].var->width()) {
       auto ptr = stmt->ptr[0].var;
-      emit("const {} {}({});", opengl_data_type_name(stmt->element_type()),
+      emit("const {} {} = {};", opengl_data_type_name(stmt->element_type()),
            stmt->raw_name(), ptr->raw_name());
     } else {
       TI_NOT_IMPLEMENTED;
@@ -787,16 +787,9 @@ FunctionType compile_to_executable(Kernel *kernel,
   params.compiled_structs = compiled_structs;
   KernelCodegen codegen(params);
   auto res = codegen.run();
-  /*for (int i = 0; i < res.task_glsl_source_codes.size(); ++i) {
-    const auto &task_attribs = res.kernel_attribs.tasks_attribs[i];
-    TI_INFO("  task={}\n", task_attribs.name);
-    std::cout << res.task_glsl_source_codes[i] << std::endl;
-    TI_INFO("  -------------------------------");
-  }
-  TI_INFO("<<<<<<<<<");*/
   auto handle = runtime->register_taichi_kernel(std::move(res));
-  return [=](Context &ctx) {
-    TI_INFO("VK: running kernel={}", taichi_kernel_name);
+  return [runtime, handle, taichi_kernel_name](Context &ctx) {
+    runtime->launch_kernel(handle, &ctx);
   };
 }
 
