@@ -40,38 +40,40 @@ std::string TaskAttributes::debug_string() const {
 }
 
 KernelContextAttributes::KernelContextAttributes(const Kernel &kernel)
-    : ctx_bytes_(0), extra_args_bytes_(Context::extra_args_size) {
+    : args_bytes_(0),
+      rets_bytes_(0),
+      extra_args_bytes_(Context::extra_args_size) {
   arg_attribs_vec_.reserve(kernel.args.size());
   for (const auto &ka : kernel.args) {
-    ArgAttributes ma;
-    ma.dt = ka.dt;
-    const size_t dt_bytes = vk_data_type_size(ma.dt);
+    ArgAttributes aa;
+    aa.dt = ka.dt;
+    const size_t dt_bytes = vk_data_type_size(aa.dt);
     if (dt_bytes != 4) {
       TI_ERROR("Vulakn kernel only supports 32-bit data, got {}",
-               data_type_name(ma.dt));
+               data_type_name(aa.dt));
     }
-    ma.is_array = ka.is_nparray;
+    aa.is_array = ka.is_nparray;
     // For array, |ka.size| is #elements * elements_size
-    ma.stride = ma.is_array ? ka.size : dt_bytes;
-    ma.index = arg_attribs_vec_.size();
-    arg_attribs_vec_.push_back(ma);
+    aa.stride = aa.is_array ? ka.size : dt_bytes;
+    aa.index = arg_attribs_vec_.size();
+    arg_attribs_vec_.push_back(aa);
   }
   for (const auto &kr : kernel.rets) {
-    RetAttributes mr;
-    mr.dt = kr.dt;
-    const size_t dt_bytes = vk_data_type_size(mr.dt);
+    RetAttributes ra;
+    ra.dt = kr.dt;
+    const size_t dt_bytes = vk_data_type_size(ra.dt);
     if (dt_bytes != 4) {
       // Metal doesn't support 64bit data buffers.
       TI_ERROR("Vulakn kernel only supports 32-bit data, got {}",
-               data_type_name(mr.dt));
+               data_type_name(ra.dt));
     }
-    mr.is_array = false;  // TODO(#909): this is a temporary limitation
-    mr.stride = dt_bytes;
-    mr.index = ret_attribs_vec_.size();
-    ret_attribs_vec_.push_back(mr);
+    ra.is_array = false;  // TODO(#909): this is a temporary limitation
+    ra.stride = dt_bytes;
+    ra.index = ret_attribs_vec_.size();
+    ret_attribs_vec_.push_back(ra);
   }
 
-  auto arrange_scalar_before_array = [&bytes = this->ctx_bytes_](auto *vec) {
+  auto arrange_scalar_before_array = [](auto *vec, size_t offset) -> size_t {
     std::vector<int> scalar_indices;
     std::vector<int> array_indices;
     for (int i = 0; i < vec->size(); ++i) {
@@ -81,22 +83,34 @@ KernelContextAttributes::KernelContextAttributes(const Kernel &kernel)
         scalar_indices.push_back(i);
       }
     }
+    size_t bytes = offset;
     // Put scalar args in the memory first
     for (int i : scalar_indices) {
       auto &attribs = (*vec)[i];
       attribs.offset_in_mem = bytes;
       bytes += attribs.stride;
+      TI_INFO("  at={} scalar offset_in_mem={} stride={}", i,
+              attribs.offset_in_mem, attribs.stride);
     }
     // Then the array args
     for (int i : array_indices) {
       auto &attribs = (*vec)[i];
       attribs.offset_in_mem = bytes;
       bytes += attribs.stride;
+      TI_INFO("  at={} array offset_in_mem={} stride={}", i,
+              attribs.offset_in_mem, attribs.stride);
     }
+    return bytes - offset;
   };
 
-  arrange_scalar_before_array(&arg_attribs_vec_);
-  arrange_scalar_before_array(&ret_attribs_vec_);
+  TI_INFO("args:");
+  args_bytes_ = arrange_scalar_before_array(&arg_attribs_vec_, 0);
+  TI_INFO("rets:");
+  rets_bytes_ = arrange_scalar_before_array(&ret_attribs_vec_, args_bytes_);
+  TI_INFO("sizes: args={} rets={} ctx={} total={}", args_bytes(), rets_bytes(),
+          ctx_bytes(), total_bytes());
+  TI_ASSERT(has_args() == (args_bytes_ > 0));
+  TI_ASSERT(has_rets() == (rets_bytes_ > 0));
 }
 
 }  // namespace vulkan
