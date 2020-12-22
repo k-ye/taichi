@@ -21,6 +21,7 @@ class VkRuntime {
     const CompileConfig *config;
     // uint64_t *host_result_buffer;
     // int root_id;
+    const SNodeDescriptorsMap *snode_descriptors = nullptr;
   };
 
   explicit VkRuntime(const Params &params);
@@ -33,8 +34,12 @@ class VkRuntime {
     int id_ = -1;
   };
 
-  KernelHandle register_taichi_kernel(const TaskAttributes &attribs,
-                                      const SpirvCodeView &code);
+  struct RegisterParams {
+    TaichiKernelAttributes kernel_attribs;
+    std::vector<std::string> task_glsl_source_codes;
+  };
+
+  KernelHandle register_taichi_kernel(RegisterParams params);
 
   void launch_kernel(KernelHandle handle);
 

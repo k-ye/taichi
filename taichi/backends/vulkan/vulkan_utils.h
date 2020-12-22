@@ -92,9 +92,8 @@ struct SpirvCodeView {
 
   SpirvCodeView() = default;
 
-  explicit SpirvCodeView(const std::vector<char> &code)
-      : data(reinterpret_cast<const uint32_t *>(code.data())),
-        size(code.size()) {
+  explicit SpirvCodeView(const std::vector<uint32_t> &code)
+      : data(code.data()), size(code.size() * sizeof(uint32_t)) {
   }
 };
 
@@ -104,6 +103,7 @@ std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
     VkPhysicalDevice physicalDevice);
 
 class VulkanEnvSettings {
+ public:
   static constexpr uint32_t kApiVersion() {
     return VK_API_VERSION_1_2;
   }
@@ -111,6 +111,19 @@ class VulkanEnvSettings {
   static constexpr shaderc_env_version kShadercEnvVersion() {
     return shaderc_env_version_vulkan_1_2;
   }
+};
+
+class GlslToSpirvCompiler {
+ public:
+  explicit GlslToSpirvCompiler();
+
+  using SpirvBinary = std::vector<uint32_t>;
+  std::optional<SpirvBinary> compile(const std::string &glsl,
+                                     const std::string kernel_name);
+
+ private:
+  shaderc::CompileOptions opts_;
+  shaderc::Compiler compiler_;
 };
 
 }  // namespace vulkan

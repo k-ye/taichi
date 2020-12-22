@@ -39,6 +39,11 @@ std::string TaskAttributes::debug_string() const {
   return result;
 }
 
+std::string TaskAttributes::BufferBind::debug_string() const {
+  return fmt::format("<type={} binding={}>", TaskAttributes::buffers_name(type),
+                     binding);
+}
+
 KernelContextAttributes::KernelContextAttributes(const Kernel &kernel)
     : args_bytes_(0),
       rets_bytes_(0),

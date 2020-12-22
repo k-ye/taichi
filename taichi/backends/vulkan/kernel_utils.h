@@ -24,6 +24,8 @@ struct TaskAttributes {
   struct BufferBind {
     Buffers type;
     int binding;
+
+    std::string debug_string() const;
   };
 
   std::string name;
@@ -88,6 +90,7 @@ class KernelContextAttributes {
   // This is mostly the same as Kernel::Ret, with Vulkan specific attributes.
   struct RetAttributes : public AttribsBase {};
 
+  KernelContextAttributes() = default;
   explicit KernelContextAttributes(const Kernel &kernel);
 
   inline bool has_args() const {
@@ -153,9 +156,9 @@ class KernelContextAttributes {
   std::vector<ArgAttributes> arg_attribs_vec_;
   std::vector<RetAttributes> ret_attribs_vec_;
 
-  size_t args_bytes_;
-  size_t rets_bytes_;
-  size_t extra_args_bytes_;
+  size_t args_bytes_ = 0;
+  size_t rets_bytes_ = 0;
+  size_t extra_args_bytes_ = 0;
 };
 
 // Groups all the Vulkan kernels generated from a single ti.kernel
@@ -167,7 +170,7 @@ struct TaichiKernelAttributes {
   // Attributes of all the tasks produced from this single Taichi kernel.
   std::vector<TaskAttributes> tasks_attribs;
 
-  std::optional<KernelContextAttributes> ctx_attribs = std::nullopt;
+  KernelContextAttributes ctx_attribs;
 };
 
 }  // namespace vulkan

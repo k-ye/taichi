@@ -27,5 +27,29 @@ std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
   return extensions;
 }
 
+GlslToSpirvCompiler::GlslToSpirvCompiler() {
+  opts_.SetTargetEnvironment(shaderc_target_env_vulkan,
+                             VulkanEnvSettings::kShadercEnvVersion());
+}
+
+std::optional<GlslToSpirvCompiler::SpirvBinary> GlslToSpirvCompiler::compile(
+    const std::string &glsl,
+    const std::string kernel_name) {
+  TI_INFO("Compiling GLSL -> SPIR-V for kernel={}\n{}", kernel_name, glsl);
+  auto spv_result =
+      compiler_.CompileGlslToSpv(glsl, shaderc_glsl_default_compute_shader,
+                                 /*input_file_name=*/kernel_name.c_str(),
+                                 /*entry_point_name=*/"main", opts_);
+  if (spv_result.GetCompilationStatus() != shaderc_compilation_status_success) {
+    TI_WARN("Failed to compile kernel={}, GLSL source:\n{}", kernel_name, glsl);
+    TI_ERROR("Compilation errors:\n{}", spv_result.GetErrorMessage());
+    return std::nullopt;
+  }
+  TI_INFO("Succesfully compiled GLSL for kernel={}", kernel_name);
+  SpirvBinary res(spv_result.begin(), spv_result.end());
+  TI_ASSERT(!res.empty());
+  return res;
+}
+
 }  // namespace vulkan
 TLANG_NAMESPACE_END
