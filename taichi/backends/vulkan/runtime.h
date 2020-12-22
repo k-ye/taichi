@@ -18,8 +18,8 @@ class VkRuntime {
  public:
   struct Params {
     // CompiledSNodeStructs compiled_snode_structs;
-    const CompileConfig *config;
-    // uint64_t *host_result_buffer;
+    const CompileConfig *config = nullptr;
+    uint64_t *host_result_buffer = nullptr;
     // int root_id;
     const SNodeDescriptorsMap *snode_descriptors = nullptr;
   };
@@ -41,7 +41,7 @@ class VkRuntime {
 
   KernelHandle register_taichi_kernel(RegisterParams params);
 
-  void launch_kernel(KernelHandle handle);
+  void launch_kernel(KernelHandle handle, Context* host_ctx);
 
   void synchronize();
 

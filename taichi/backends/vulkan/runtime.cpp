@@ -11,6 +11,9 @@
 #include <vector>
 
 #include "taichi/math/arithmetic.h"
+#define TI_RUNTIME_HOST
+#include "taichi/program/context.h"
+#undef TI_RUNTIME_HOST
 
 TLANG_NAMESPACE_BEGIN
 
@@ -351,9 +354,6 @@ class UserVulkanKernel {
     layoutBindings.reserve(buffer_binds.size());
     for (const auto &bb : buffer_binds) {
       VkDescriptorSetLayoutBinding layoutBinding{};
-      TI_INFO("task={} buffer_binding={}", params.attribs->name,
-              bb.debug_string());
-
       layoutBinding.binding = bb.binding;
       layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       layoutBinding.descriptorCount = 1;
@@ -514,6 +514,113 @@ class UserVulkanKernel {
   VkCommandBuffer commandBuffer_;
 };
 
+class HostDeviceContextBlitter {
+ public:
+  HostDeviceContextBlitter(const KernelContextAttributes *ctx_attribs,
+                           Context *host_ctx,
+                           uint64_t *host_result_buffer,
+                           VkBufferWithMemory *device_buffer)
+      : ctx_attribs_(ctx_attribs),
+        host_ctx_(host_ctx),
+        host_result_buffer_(host_result_buffer),
+        device_buffer_(device_buffer) {
+  }
+
+  void host_to_device() {
+    if (ctx_attribs_->empty()) {
+      return;
+    }
+    auto mapped = device_buffer_->map_mem();
+    char *const device_base = reinterpret_cast<char *>(mapped.data());
+
+#define TO_DEVICE(short_type, type)                         \
+  else if (dt->is_primitive(PrimitiveTypeID::short_type)) { \
+    auto d = host_ctx_->get_arg<type>(i);                   \
+    std::memcpy(device_ptr, &d, sizeof(d));                 \
+  }
+    for (int i = 0; i < ctx_attribs_->args().size(); ++i) {
+      const auto &arg = ctx_attribs_->args()[i];
+      const auto dt = arg.dt;
+      char *device_ptr = device_base + arg.offset_in_mem;
+      if (arg.is_array) {
+        const void *host_ptr = host_ctx_->get_arg<void *>(i);
+        std::memcpy(device_ptr, host_ptr, arg.stride);
+      }
+      TO_DEVICE(i32, int32)
+      TO_DEVICE(u32, uint32)
+      TO_DEVICE(f32, float32)
+      else {
+        TI_ERROR("Vulkan does not support arg type={}", data_type_name(arg.dt));
+      }
+    }
+    char *device_ptr = device_base + ctx_attribs_->extra_args_mem_offset();
+    std::memcpy(device_ptr, host_ctx_->extra_args,
+                ctx_attribs_->extra_args_bytes());
+#undef TO_DEVICE
+  }
+
+  void device_to_host() {
+    if (ctx_attribs_->empty()) {
+      return;
+    }
+    auto mapped = device_buffer_->map_mem();
+    char *const device_base = reinterpret_cast<char *>(mapped.data());
+#define TO_HOST(short_type, type)                           \
+  else if (dt->is_primitive(PrimitiveTypeID::short_type)) { \
+    const type d = *reinterpret_cast<type *>(device_ptr);   \
+    host_result_buffer_[i] =                                \
+        taichi_union_cast_with_different_sizes<uint64>(d);  \
+  }
+
+    for (int i = 0; i < ctx_attribs_->args().size(); ++i) {
+      const auto &arg = ctx_attribs_->args()[i];
+      char *device_ptr = device_base + arg.offset_in_mem;
+      if (arg.is_array) {
+        void *host_ptr = host_ctx_->get_arg<void *>(i);
+        std::memcpy(host_ptr, device_ptr, arg.stride);
+      }
+    }
+    for (int i = 0; i < ctx_attribs_->rets().size(); ++i) {
+      // Note that we are copying the i-th return value on Metal to the i-th
+      // *arg* on the host context.
+      const auto &ret = ctx_attribs_->rets()[i];
+      char *device_ptr = device_base + ret.offset_in_mem;
+      const auto dt = ret.dt;
+
+      if (ret.is_array) {
+        void *host_ptr = host_ctx_->get_arg<void *>(i);
+        std::memcpy(host_ptr, device_ptr, ret.stride);
+      }
+      TO_HOST(i32, int32)
+      TO_HOST(u32, uint32)
+      TO_HOST(f32, float32)
+      else {
+        TI_ERROR("Vulkan does not support return value type={}",
+                 data_type_name(ret.dt));
+      }
+    }
+#undef TO_HOST
+  }
+
+  static std::unique_ptr<HostDeviceContextBlitter> maybe_make(
+      const KernelContextAttributes *ctx_attribs,
+      Context *host_ctx,
+      uint64_t *host_result_buffer,
+      VkBufferWithMemory *device_buffer) {
+    if (ctx_attribs->empty()) {
+      return nullptr;
+    }
+    return std::make_unique<HostDeviceContextBlitter>(
+        ctx_attribs, host_ctx, host_result_buffer, device_buffer);
+  }
+
+ private:
+  const KernelContextAttributes *const ctx_attribs_;
+  Context *const host_ctx_;
+  uint64_t *const host_result_buffer_;
+  VkBufferWithMemory *const device_buffer_;
+};
+
 // Info for launching a compiled Taichi kernel, which consists of a series of
 // compiled Vulkan kernels.
 class CompiledTaichiKernel {
@@ -572,7 +679,12 @@ class CompiledTaichiKernel {
 class VkRuntime ::Impl {
  public:
   explicit Impl(const Params &params)
-      : snode_descriptors_(params.snode_descriptors) {
+      : config_(params.config),
+        snode_descriptors_(params.snode_descriptors),
+        host_result_buffer_(params.host_result_buffer) {
+    TI_ASSERT(config_ != nullptr);
+    TI_ASSERT(snode_descriptors_ != nullptr);
+    TI_ASSERT(host_result_buffer_ != nullptr);
     CreateInstance();
     SetupDebugMessenger();
     PickPhysicalDevice();
@@ -600,16 +712,6 @@ class VkRuntime ::Impl {
   }
 
   KernelHandle register_taichi_kernel(RegisterParams reg_params) {
-    /*struct Params {
-      const TaichiKernelAttributes *ti_kernel_attribs = nullptr;
-      std::vector<GlslToSpirvCompiler::SpirvBinary> spirv_bins;
-      const SNodeDescriptorsMap *snode_descriptors = nullptr;
-      VkBufferWithMemory *root_buffer = nullptr;
-      VkBufferWithMemory *global_tmps_buffer = nullptr;
-      VkDevice device = VK_NULL_HANDLE;
-      VkQueue compute_queue = VK_NULL_HANDLE;
-      VkCommandPool command_pool = VK_NULL_HANDLE;
-    };*/
     CompiledTaichiKernel::Params params;
     params.ti_kernel_attribs = &(reg_params.kernel_attribs);
     params.snode_descriptors = snode_descriptors_;
@@ -634,9 +736,23 @@ class VkRuntime ::Impl {
     return res;
   }
 
-  void launch_kernel(KernelHandle handle) {
+  void launch_kernel(KernelHandle handle, Context *host_ctx) {
     // ti_kernels_[handle.id_]->launch();
-    TI_NOT_IMPLEMENTED;
+    auto *ti_kernel = ti_kernels_[handle.id_].get();
+    auto ctx_blitter = HostDeviceContextBlitter::maybe_make(
+        &ti_kernel->ti_kernel_attribs.ctx_attribs, host_ctx,
+        host_result_buffer_, ti_kernel->ctx_buffer_.get());
+    if (ctx_blitter) {
+      TI_ASSERT(ti_kernel->ctx_buffer_ != nullptr);
+      ctx_blitter->host_to_device();
+    }
+    for (auto &vk : ti_kernel->vk_kernels) {
+      vk->launch();
+    }
+    if (ctx_blitter) {
+      synchronize();
+      ctx_blitter->device_to_host();
+    }
   }
 
   void synchronize() {
@@ -800,7 +916,9 @@ class VkRuntime ::Impl {
     global_tmps_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
   }
 
+  const CompileConfig *const config_;
   const SNodeDescriptorsMap *const snode_descriptors_;
+  uint64_t *const host_result_buffer_;
   VkInstance instance_;
   VkDebugUtilsMessengerEXT debugMessenger_;
   VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
@@ -830,7 +948,7 @@ class VkRuntime::Impl {
     return KernelHandle();
   }
 
-  void launch_kernel(KernelHandle) {
+  void launch_kernel(KernelHandle, Context *) {
     TI_ERROR("Vulkan disabled");
   }
 
@@ -860,8 +978,8 @@ VkRuntime::KernelHandle VkRuntime::register_taichi_kernel(
   return impl_->register_taichi_kernel(std::move(params));
 }
 
-void VkRuntime::launch_kernel(KernelHandle handle) {
-  impl_->launch_kernel(handle);
+void VkRuntime::launch_kernel(KernelHandle handle, Context *host_ctx) {
+  impl_->launch_kernel(handle, host_ctx);
 }
 
 void VkRuntime::synchronize() {
