@@ -169,21 +169,29 @@ bool IsDeviceSuitable(VkPhysicalDevice device) {
 // https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/custom_memory_pools.html
 class LinearVkMemoryPool {
  public:
-  static constexpr VkDeviceSize kAlignment = 16;
+  static constexpr VkDeviceSize kAlignment = 256;
 
   struct Params {
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     VkMemoryPropertyFlags requiredProperties;
     VkDeviceSize poolSize = 0;
+    uint32_t computeQueueFamilyIndex = 0;
+    VkBufferCreateInfo bufferCreationTemplate;
   };
 
   LinearVkMemoryPool(const Params &params, VkDeviceMemory mem, uint32_t mti)
       : device_(params.device),
         memory_(mem),
         memory_type_index_(mti),
+        compute_queue_family_index_(params.computeQueueFamilyIndex),
+        buffer_creation_template_(params.bufferCreationTemplate),
         pool_size_(params.poolSize),
         next_(0) {
+    buffer_creation_template_.size = 0;
+    buffer_creation_template_.queueFamilyIndexCount = 1;
+    buffer_creation_template_.pQueueFamilyIndices =
+        &compute_queue_family_index_;
   }
 
   ~LinearVkMemoryPool() {
@@ -212,16 +220,21 @@ class LinearVkMemoryPool {
                                                 allocInfo.memoryTypeIndex);
   }
 
-  std::unique_ptr<VkBufferWithMemory> alloc_and_bind(
-      VkBufferCreateInfo createInfo) {
-    createInfo.size = roundup_aligned(createInfo.size);
-    VkBuffer buffer;
-    BAIL_ON_VK_BAD_RESULT(
-        vkCreateBuffer(device_, &createInfo, kNoVkAllocCallbacks, &buffer),
-        "failed to create buffer");
+  std::unique_ptr<VkBufferWithMemory> alloc_and_bind(VkDeviceSize buf_size) {
+    buf_size = roundup_aligned(buf_size);
+    if (pool_size_ <= (next_ + buf_size)) {
+      TI_WARN("Vulkan memory pool exhausted, max size={}", pool_size_);
+      return nullptr;
+    }
 
+    VkBuffer buffer;
+    buffer_creation_template_.size = buf_size;
+    BAIL_ON_VK_BAD_RESULT(vkCreateBuffer(device_, &buffer_creation_template_,
+                                         kNoVkAllocCallbacks, &buffer),
+                          "failed to create buffer");
+    buffer_creation_template_.size = 0;  // reset
     const auto offset_in_mem = next_;
-    next_ += createInfo.size;
+    next_ += buf_size;
     BAIL_ON_VK_BAD_RESULT(
         vkBindBufferMemory(device_, buffer, memory_, offset_in_mem),
         "failed to bind buffer to memory");
@@ -229,10 +242,11 @@ class LinearVkMemoryPool {
     VkMemoryRequirements memRequirements;
     vkGetBufferMemoryRequirements(device_, buffer, &memRequirements);
     TI_ASSERT(memRequirements.memoryTypeBits & (1 << memory_type_index_));
-    TI_ASSERT((createInfo.size % memRequirements.alignment) == 0);
-
+    TI_ASSERT_INFO((buf_size % memRequirements.alignment) == 0,
+                   "buf_size={} required alignment={}", buf_size,
+                   memRequirements.alignment);
     return std::make_unique<VkBufferWithMemory>(device_, buffer, memory_,
-                                                createInfo.size, offset_in_mem);
+                                                buf_size, offset_in_mem);
   }
 
  private:
@@ -267,6 +281,8 @@ class LinearVkMemoryPool {
   VkDevice device_ = VK_NULL_HANDLE;  // not owned
   VkDeviceMemory memory_ = VK_NULL_HANDLE;
   uint32_t memory_type_index_ = 0;
+  uint32_t compute_queue_family_index_ = 0;
+  VkBufferCreateInfo buffer_creation_template_;
   VkDeviceSize pool_size_ = 0;
   VkDeviceSize next_ = 0;
 };
@@ -302,7 +318,7 @@ class UserVulkanKernel {
   };
 
   explicit UserVulkanKernel(const Params &params)
-      : device_(params.device), computeQueue_(params.compute_queue) {
+      : device_(params.device), compute_queue_(params.compute_queue) {
     CreateDescriptorSetLayout(params);
     CreateComputePipeline(params);
     CreateDescriptorPool(params);
@@ -323,7 +339,7 @@ class UserVulkanKernel {
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer_;
-    BAIL_ON_VK_BAD_RESULT(vkQueueSubmit(computeQueue_, /*submitCount=*/1,
+    BAIL_ON_VK_BAD_RESULT(vkQueueSubmit(compute_queue_, /*submitCount=*/1,
                                         &submitInfo, /*fence=*/VK_NULL_HANDLE),
                           "failed to submit command buffer");
   }
@@ -335,6 +351,9 @@ class UserVulkanKernel {
     layoutBindings.reserve(buffer_binds.size());
     for (const auto &bb : buffer_binds) {
       VkDescriptorSetLayoutBinding layoutBinding{};
+      TI_INFO("task={} buffer_binding={}", params.attribs->name,
+              bb.debug_string());
+
       layoutBinding.binding = bb.binding;
       layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
       layoutBinding.descriptorCount = 1;
@@ -362,7 +381,7 @@ class UserVulkanKernel {
     shaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     shaderStageInfo.module = shaderModule;
-    shaderStageInfo.pName = params.attribs->name.c_str();
+    shaderStageInfo.pName = "main";
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -485,8 +504,8 @@ class UserVulkanKernel {
                           "failed to record command buffer");
   }
 
-  VkDevice device_;       // not owned
-  VkQueue computeQueue_;  // not owned
+  VkDevice device_;        // not owned
+  VkQueue compute_queue_;  // not owned
   VkDescriptorSetLayout descriptorSetLayout_;
   VkPipelineLayout pipelineLayout_;
   VkPipeline pipeline_;
@@ -495,11 +514,65 @@ class UserVulkanKernel {
   VkCommandBuffer commandBuffer_;
 };
 
+// Info for launching a compiled Taichi kernel, which consists of a series of
+// compiled Vulkan kernels.
+class CompiledTaichiKernel {
+ public:
+  struct Params {
+    const TaichiKernelAttributes *ti_kernel_attribs = nullptr;
+    std::vector<GlslToSpirvCompiler::SpirvBinary> spirv_bins;
+    const SNodeDescriptorsMap *snode_descriptors = nullptr;
+    VkBufferWithMemory *root_buffer = nullptr;
+    VkBufferWithMemory *global_tmps_buffer = nullptr;
+    LinearVkMemoryPool *vk_mem_pool = nullptr;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue compute_queue = VK_NULL_HANDLE;
+    VkCommandPool command_pool = VK_NULL_HANDLE;
+  };
+
+  CompiledTaichiKernel(const Params &ti_params)
+      : ti_kernel_attribs(*ti_params.ti_kernel_attribs) {
+    InputBuffersMap input_buffers = {
+        {BufferEnum::Root, ti_params.root_buffer},
+        {BufferEnum::GlobalTmps, ti_params.global_tmps_buffer},
+    };
+    if (!ti_kernel_attribs.ctx_attribs.empty()) {
+      ctx_buffer_ = ti_params.vk_mem_pool->alloc_and_bind(
+          ti_kernel_attribs.ctx_attribs.total_bytes());
+      input_buffers[BufferEnum::Context] = ctx_buffer_.get();
+    }
+
+    const auto &task_attribs = ti_kernel_attribs.tasks_attribs;
+    const auto &spirv_bins = ti_params.spirv_bins;
+    TI_ASSERT(task_attribs.size() == spirv_bins.size());
+
+    for (int i = 0; i < task_attribs.size(); ++i) {
+      UserVulkanKernel::Params vk_params;
+      vk_params.code = SpirvCodeView(spirv_bins[i]);
+      vk_params.attribs = &task_attribs[i];
+      vk_params.input_buffers = &input_buffers;
+      vk_params.device = ti_params.device;
+      vk_params.compute_queue = ti_params.compute_queue;
+      vk_params.command_pool = ti_params.command_pool;
+
+      vk_kernels.push_back(
+          std::make_unique<UserVulkanKernel>(std::move(vk_params)));
+    }
+  }
+
+  // Have to be exposed as public for Impl to use. We cannot friend the Impl
+  // class because it is private.
+  TaichiKernelAttributes ti_kernel_attribs;
+  std::unique_ptr<VkBufferWithMemory> ctx_buffer_;
+  std::vector<std::unique_ptr<UserVulkanKernel>> vk_kernels;
+};
+
 }  // namespace
 
 class VkRuntime ::Impl {
  public:
-  explicit Impl(const Params &params) {
+  explicit Impl(const Params &params)
+      : snode_descriptors_(params.snode_descriptors) {
     CreateInstance();
     SetupDebugMessenger();
     PickPhysicalDevice();
@@ -511,55 +584,71 @@ class VkRuntime ::Impl {
 
   ~Impl() {
     {
-      decltype(vk_kernels_) tmp;
-      tmp.swap(vk_kernels_);
+      decltype(ti_kernels_) tmp;
+      tmp.swap(ti_kernels_);
     }
-    globalTmpsBuffer_.reset();
-    rootBuffer_.reset();
-    memoryPool_.reset();
+    global_tmps_buffer_.reset();
+    root_buffer_.reset();
+    memory_pool_.reset();
     if constexpr (kEnableValidationLayers) {
       DestroyDebugUtilsMessengerEXT(instance_, debugMessenger_,
                                     kNoVkAllocCallbacks);
     }
-    vkDestroyCommandPool(device_, commandPool_, kNoVkAllocCallbacks);
+    vkDestroyCommandPool(device_, command_pool_, kNoVkAllocCallbacks);
     vkDestroyDevice(device_, kNoVkAllocCallbacks);
     vkDestroyInstance(instance_, kNoVkAllocCallbacks);
   }
 
-  KernelHandle register_taichi_kernel(const TaskAttributes &attribs,
-                                      const SpirvCodeView &code) {
-    InputBuffersMap input_buffers = {
-        {BufferEnum::Root, rootBuffer_.get()},
-        {BufferEnum::GlobalTmps, globalTmpsBuffer_.get()},
-    };
-    UserVulkanKernel::Params params;
-    params.code = code;
-    params.attribs = &attribs;
-    params.input_buffers = &input_buffers;
+  KernelHandle register_taichi_kernel(RegisterParams reg_params) {
+    /*struct Params {
+      const TaichiKernelAttributes *ti_kernel_attribs = nullptr;
+      std::vector<GlslToSpirvCompiler::SpirvBinary> spirv_bins;
+      const SNodeDescriptorsMap *snode_descriptors = nullptr;
+      VkBufferWithMemory *root_buffer = nullptr;
+      VkBufferWithMemory *global_tmps_buffer = nullptr;
+      VkDevice device = VK_NULL_HANDLE;
+      VkQueue compute_queue = VK_NULL_HANDLE;
+      VkCommandPool command_pool = VK_NULL_HANDLE;
+    };*/
+    CompiledTaichiKernel::Params params;
+    params.ti_kernel_attribs = &(reg_params.kernel_attribs);
+    params.snode_descriptors = snode_descriptors_;
+    params.root_buffer = root_buffer_.get();
+    params.global_tmps_buffer = global_tmps_buffer_.get();
+    params.vk_mem_pool = memory_pool_.get();
     params.device = device_;
-    params.compute_queue = computeQueue_;
-    params.command_pool = commandPool_;
+    params.compute_queue = compute_queue_;
+    params.command_pool = command_pool_;
 
+    for (int i = 0; i < reg_params.task_glsl_source_codes.size(); ++i) {
+      const auto &attribs = reg_params.kernel_attribs.tasks_attribs[i];
+      auto spv_bin =
+          spv_compiler_
+              .compile(reg_params.task_glsl_source_codes[i], attribs.name)
+              .value();
+      params.spirv_bins.push_back(std::move(spv_bin));
+    }
     KernelHandle res;
-    res.id_ = vk_kernels_.size();
-    vk_kernels_.push_back(std::make_unique<UserVulkanKernel>(params));
+    res.id_ = ti_kernels_.size();
+    ti_kernels_.push_back(std::make_unique<CompiledTaichiKernel>(params));
     return res;
   }
 
   void launch_kernel(KernelHandle handle) {
-    vk_kernels_[handle.id_]->launch();
+    // ti_kernels_[handle.id_]->launch();
+    TI_NOT_IMPLEMENTED;
   }
 
   void synchronize() {
-    vkQueueWaitIdle(computeQueue_);
+    vkQueueWaitIdle(compute_queue_);
   }
 
   VkBufferWithMemory *root_buffer() {
-    return rootBuffer_.get();
+    return root_buffer_.get();
   }
 
   VkBufferWithMemory *global_tmps_buffer() {
-    return globalTmpsBuffer_.get();
+    return global_tmps_buffer_.get();
   }
 
  private:
@@ -570,7 +659,7 @@ class VkRuntime ::Impl {
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_0;  // important
+    appInfo.apiVersion = VulkanEnvSettings::kApiVersion();  // important
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -666,7 +755,7 @@ class VkRuntime ::Impl {
                                          kNoVkAllocCallbacks, &device_),
                           "failed to create logical device");
     vkGetDeviceQueue(device_, queueFamilyIndices_.computeFamily.value(),
-                     /*queueIndex=*/0, &computeQueue_);
+                     /*queueIndex=*/0, &compute_queue_);
   }
 
   void CreateCommandPool() {
@@ -676,7 +765,7 @@ class VkRuntime ::Impl {
     poolInfo.queueFamilyIndex = queueFamilyIndices_.computeFamily.value();
     BAIL_ON_VK_BAD_RESULT(
         vkCreateCommandPool(device_, &poolInfo, kNoVkAllocCallbacks,
-                            &commandPool_),
+                            &command_pool_),
         "failed to create command pool");
   }
 
@@ -689,37 +778,43 @@ class VkRuntime ::Impl {
     mp_params.poolSize = 100 * 1024 * 1024;
     mp_params.requiredProperties = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    memoryPool_ = LinearVkMemoryPool::try_make(mp_params);
-    TI_ASSERT(memoryPool_ != nullptr);
+    mp_params.computeQueueFamilyIndex =
+        queueFamilyIndices_.computeFamily.value();
+
+    auto &bufTemplate = mp_params.bufferCreationTemplate;
+    bufTemplate.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufTemplate.pNext = nullptr;
+    bufTemplate.flags = 0;
+    bufTemplate.size = 0;
+    bufTemplate.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bufTemplate.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    bufTemplate.queueFamilyIndexCount = 1;
+    bufTemplate.pQueueFamilyIndices = nullptr;
+
+    memory_pool_ = LinearVkMemoryPool::try_make(mp_params);
+    TI_ASSERT(memory_pool_ != nullptr);
   }
 
   void init_vk_buffers() {
-    const uint32_t computeQueueFamiltyIndex =
-        queueFamilyIndices_.computeFamily.value();
-    VkBufferCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    createInfo.size = 1024 * 1024;
-    createInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    createInfo.queueFamilyIndexCount = 1;
-    createInfo.pQueueFamilyIndices = &computeQueueFamiltyIndex;
-    rootBuffer_ = memoryPool_->alloc_and_bind(createInfo);
-    globalTmpsBuffer_ = memoryPool_->alloc_and_bind(createInfo);
+    root_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
+    global_tmps_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
   }
 
+  const SNodeDescriptorsMap *const snode_descriptors_;
   VkInstance instance_;
   VkDebugUtilsMessengerEXT debugMessenger_;
   VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
   QueueFamilyIndices queueFamilyIndices_;
   VkDevice device_;
-  VkQueue computeQueue_;
-  VkCommandPool commandPool_;
+  VkQueue compute_queue_;
+  VkCommandPool command_pool_;
+  GlslToSpirvCompiler spv_compiler_;
 
-  std::unique_ptr<LinearVkMemoryPool> memoryPool_;
-  std::unique_ptr<VkBufferWithMemory> rootBuffer_;
-  std::unique_ptr<VkBufferWithMemory> globalTmpsBuffer_;
+  std::unique_ptr<LinearVkMemoryPool> memory_pool_;
+  std::unique_ptr<VkBufferWithMemory> root_buffer_;
+  std::unique_ptr<VkBufferWithMemory> global_tmps_buffer_;
 
-  std::vector<std::unique_ptr<UserVulkanKernel>> vk_kernels_;
+  std::vector<std::unique_ptr<CompiledTaichiKernel>> ti_kernels_;
 };
 
 #else
@@ -730,8 +825,7 @@ class VkRuntime::Impl {
     TI_ERROR("Vulkan disabled");
   }
 
-  KernelHandle register_taichi_kernel(const TaskAttributes &,
-                                      const SpirvCodeView &) {
+  KernelHandle register_taichi_kernel(RegisterParams) {
     TI_ERROR("Vulkan disabled");
     return KernelHandle();
   }
@@ -762,9 +856,8 @@ VkRuntime::~VkRuntime() {
 }
 
 VkRuntime::KernelHandle VkRuntime::register_taichi_kernel(
-    const TaskAttributes &attribs,
-    const SpirvCodeView &code) {
-  return impl_->register_taichi_kernel(attribs, code);
+    RegisterParams params) {
+  return impl_->register_taichi_kernel(std::move(params));
 }
 
 void VkRuntime::launch_kernel(KernelHandle handle) {

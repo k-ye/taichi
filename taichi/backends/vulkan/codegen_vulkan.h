@@ -10,12 +10,14 @@ class Kernel;
 
 namespace vulkan {
 
+class VkRuntime;
+
 void lower(Kernel *kernel);
 
 // These ASTs must have already been lowered at the CHI level.
-FunctionType compile_to_executable(
-    Kernel *kernel,
-    const CompiledSNodeStructs *compiled_structs);
+FunctionType compile_to_executable(Kernel *kernel,
+                                   const CompiledSNodeStructs *compiled_structs,
+                                   VkRuntime *runtime);
 
 }  // namespace vulkan
 

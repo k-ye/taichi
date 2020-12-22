@@ -27,6 +27,10 @@
 #include "taichi/system/threading.h"
 #include "taichi/system/unified_allocator.h"
 
+#ifdef TI_WITH_VULKAN
+#include "taichi/backends/vulkan/runtime.h"
+#endif
+
 TLANG_NAMESPACE_BEGIN
 
 struct JITEvaluatorId {
@@ -299,6 +303,7 @@ class Program {
   SNodeRwAccessorsBank snode_rw_accessors_bank_;
   // Vulkan related data structures
   std::optional<vulkan::CompiledSNodeStructs> vulkan_compiled_structs_;
+  std::unique_ptr<vulkan::VkRuntime> vulkan_runtime_;
 
  public:
 #ifdef TI_WITH_CC

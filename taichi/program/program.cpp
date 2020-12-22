@@ -249,8 +249,8 @@ FunctionType Program::compile(Kernel &kernel) {
 #endif
   } else if (kernel.arch == Arch::vulkan) {
     vulkan::lower(&kernel);
-    ret = vulkan::compile_to_executable(&kernel,
-                                        &vulkan_compiled_structs_.value());
+    ret = vulkan::compile_to_executable(
+        &kernel, &vulkan_compiled_structs_.value(), vulkan_runtime_.get());
   } else {
     TI_NOT_IMPLEMENTED;
   }
@@ -455,6 +455,10 @@ void Program::materialize_layout() {
   } else if (config.arch == Arch::vulkan) {
     result_buffer = allocate_result_buffer_default(this);
     vulkan_compiled_structs_ = vulkan::compile_snode_structs(*snode_root);
+    vulkan::VkRuntime::Params params;
+    params.config = &config;
+    params.snode_descriptors = &(vulkan_compiled_structs_->snode_descriptors);
+    vulkan_runtime_ = std::make_unique<vulkan::VkRuntime>(std::move(params));
   }
 }
 

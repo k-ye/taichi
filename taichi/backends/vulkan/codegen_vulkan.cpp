@@ -9,6 +9,7 @@
 #include "taichi/ir/ir.h"
 #include "taichi/util/line_appender.h"
 #include "taichi/backends/vulkan/kernel_utils.h"
+#include "taichi/backends/vulkan/runtime.h"
 #include "taichi/backends/opengl/opengl_data_types.h"
 #include "taichi/ir/transforms.h"
 
@@ -94,7 +95,7 @@ class TaskCodegen : public IRVisitor {
       : task_ir_(params.task_ir),
         compiled_structs_(params.compiled_structs),
         ctx_attribs_(params.ctx_attribs),
-        task_name_(fmt::format("{}_t{:04d}",
+        task_name_(fmt::format("{}_t{:02d}",
                                params.ti_kernel_name,
                                params.task_id_in_kernel)) {
     allow_undefined_visitor = true;
@@ -731,10 +732,7 @@ class KernelCodegen {
       : params_(params), ctx_attribs_(*params.kernel) {
   }
 
-  struct Result {
-    TaichiKernelAttributes kernel_attribs;
-    std::vector<std::string> task_glsl_source_codes;
-  };
+  using Result = VkRuntime::RegisterParams;
 
   Result run() {
     Result res;
@@ -754,9 +752,7 @@ class KernelCodegen {
       kernel_attribs.tasks_attribs.push_back(std::move(task_res.task_attribs));
       res.task_glsl_source_codes.push_back(std::move(task_res.source_code));
     }
-    if (!ctx_attribs_.empty()) {
-      kernel_attribs.ctx_attribs = std::move(ctx_attribs_);
-    }
+    kernel_attribs.ctx_attribs = std::move(ctx_attribs_);
     kernel_attribs.name = params_.ti_kernel_name;
     kernel_attribs.is_jit_evaluator = params_.kernel->is_evaluator;
     return res;
@@ -779,9 +775,9 @@ void lower(Kernel *kernel) {
                                 /*make_thread_local=*/false);
 }
 
-FunctionType compile_to_executable(
-    Kernel *kernel,
-    const CompiledSNodeStructs *compiled_structs) {
+FunctionType compile_to_executable(Kernel *kernel,
+                                   const CompiledSNodeStructs *compiled_structs,
+                                   VkRuntime *runtime) {
   const auto id = Program::get_kernel_id();
   const auto taichi_kernel_name(fmt::format("{}_k{:04d}_vk", kernel->name, id));
   TI_INFO("VK codegen for Taichi kernel={}", taichi_kernel_name);
@@ -790,16 +786,15 @@ FunctionType compile_to_executable(
   params.kernel = kernel;
   params.compiled_structs = compiled_structs;
   KernelCodegen codegen(params);
-  const auto res = codegen.run();
-
-  for (int i = 0; i < res.task_glsl_source_codes.size(); ++i) {
+  auto res = codegen.run();
+  /*for (int i = 0; i < res.task_glsl_source_codes.size(); ++i) {
     const auto &task_attribs = res.kernel_attribs.tasks_attribs[i];
     TI_INFO("  task={}\n", task_attribs.name);
     std::cout << res.task_glsl_source_codes[i] << std::endl;
     TI_INFO("  -------------------------------");
   }
-  TI_INFO("<<<<<<<<<");
-
+  TI_INFO("<<<<<<<<<");*/
+  auto handle = runtime->register_taichi_kernel(std::move(res));
   return [=](Context &ctx) {
     TI_INFO("VK: running kernel={}", taichi_kernel_name);
   };
