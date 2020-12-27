@@ -142,14 +142,21 @@ def prepare_sandbox():
     Returns a temporary directory, which will be automatically deleted on exit.
     It may contain the taichi_core shared object or some misc. files.
     '''
-    import atexit
+    # import atexit
     import shutil
-    from tempfile import mkdtemp
-    tmp_dir = mkdtemp(prefix='taichi-')
-    atexit.register(shutil.rmtree, tmp_dir)
-    print(f'[Taichi] preparing sandbox at {tmp_dir}')
-    os.mkdir(os.path.join(tmp_dir, 'runtime/'))
-    return tmp_dir
+    # from tempfile import mkdtemp
+    # tmp_dir = mkdtemp(prefix='taichi-')
+    # atexit.register(shutil.rmtree, tmp_dir)
+    # print(f'[Taichi] preparing sandbox at {tmp_dir}')
+    # os.mkdir(os.path.join(tmp_dir, 'runtime/'))
+    # return tmp_dir
+    MY_DIR = os.path.abspath(os.path.join(os.sep, 'home', 'yekuang', 'Libs', 'taichi_sandbox'))
+    assert os.path.isdir(MY_DIR)
+    rtm_dir = os.path.join(MY_DIR, 'runtime')
+    # shutil.rmtree(rtm_dir)
+    # os.makedirs(rtm_dir)
+    assert os.path.isdir(rtm_dir)
+    return MY_DIR
 
 
 def get_unique_task_id():
@@ -204,7 +211,8 @@ else:
         tmp_cwd = os.getcwd()
         tmp_dir = prepare_sandbox()
         check_exists(lib_path)
-        shutil.copy(lib_path, os.path.join(tmp_dir, 'taichi_core.so'))
+        check_exists(os.path.join(tmp_dir, 'taichi_core.so'))
+        # shutil.copy(lib_path, os.path.join(tmp_dir, 'taichi_core.so'))
         os.chdir(tmp_dir)
         sys.path.append(tmp_dir)
         try:

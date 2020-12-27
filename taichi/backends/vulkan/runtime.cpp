@@ -1,7 +1,9 @@
 #include "taichi/backends/vulkan/runtime.h"
 
 #include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
+#include <chrono>
 #include <array>
 #include <iostream>
 #include <memory>
@@ -34,14 +36,15 @@ namespace {
 /// </summary>
 constexpr VkAllocationCallbacks *kNoVkAllocCallbacks = nullptr;
 #ifdef NDEBUG
-constexpr bool kEnableValidationLayers = false;
+constexpr bool kEnableValidationLayers = true;
 #else
 constexpr bool kEnableValidationLayers = true;
 #endif  // #ifdef NDEBUG
 
-constexpr std::array<const char *, 1> kValidationLayers = {
-    "VK_LAYER_KHRONOS_validation",
-};
+// constexpr std::array<const char *, 1> kValidationLayers = {
+//     "VK_LAYER_KHRONOS_validation",
+// };
+const std::vector<const char *> kValidationLayers = {};
 
 bool CheckValidationLayerSupport() {
   uint32_t layerCount;
@@ -114,11 +117,37 @@ void DestroyDebugUtilsMessengerEXT(VkInstance instance,
 
 std::vector<const char *> GetRequiredExtensions() {
   std::vector<const char *> extensions;
-  if constexpr (kEnableValidationLayers) {
-    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-  }
+  // if constexpr (kEnableValidationLayers) {
+  extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+  // }
   return extensions;
 }
+
+std::vector<const char *> GetDeviceRequiredExtensions() {
+  std::vector<const char *> extensions;
+  // extensions.push_back(VK_EXT_DEBUG_MARKER_EXTENSION_NAME);
+  return extensions;
+}
+
+class StopWatch {
+ public:
+  StopWatch() : begin_(std::chrono::system_clock::now()) {
+  }
+
+  int GetMicros() {
+    typedef std::chrono::duration<float> fsec;
+
+    auto now = std::chrono::system_clock::now();
+
+    fsec fs = now - begin_;
+    begin_ = now;
+    auto d = std::chrono::duration_cast<std::chrono::microseconds>(fs);
+    return d.count();
+  }
+
+ private:
+  std::chrono::time_point<std::chrono::system_clock> begin_;
+};
 
 struct QueueFamilyIndices {
   std::optional<uint32_t> computeFamily;
@@ -321,15 +350,19 @@ class UserVulkanKernel {
   };
 
   explicit UserVulkanKernel(const Params &params)
-      : device_(params.device), compute_queue_(params.compute_queue) {
+      : name_(params.attribs->name),
+        device_(params.device),
+        compute_queue_(params.compute_queue) {
     CreateDescriptorSetLayout(params);
     CreateComputePipeline(params);
     CreateDescriptorPool(params);
     CreateDescriptorSets(params);
     CreateCommandBuffer(params);
+    CreateSyncObjects();
   }
 
   ~UserVulkanKernel() {
+    vkDestroyFence(device_, sync_fence_, kNoVkAllocCallbacks);
     vkDestroyDescriptorPool(device_, descriptorPool_, kNoVkAllocCallbacks);
     vkDestroyPipeline(device_, pipeline_, kNoVkAllocCallbacks);
     vkDestroyPipelineLayout(device_, pipelineLayout_, kNoVkAllocCallbacks);
@@ -342,9 +375,36 @@ class UserVulkanKernel {
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer_;
+
+    // auto pfnQueueDebugBegin =
+    //     (PFN_vkQueueBeginDebugUtilsLabelEXT)vkGetDeviceProcAddr(
+    //         device_, "vkQueueBeginDebugUtilsLabelEXT");
+    // TI_ASSERT_INFO(pfnQueueDebugBegin != nullptr,
+    //                "Cannot find vkQueueBeginDebugUtilsLabelEXT");
+    // auto pfnQueueDebugEnd =
+    //     (PFN_vkQueueEndDebugUtilsLabelEXT)vkGetDeviceProcAddr(
+    //         device_, "vkQueueEndDebugUtilsLabelEXT");
+    // TI_ASSERT_INFO(pfnQueueDebugEnd != nullptr,
+    //                "Cannot find vkQueueEndDebugUtilsLabelEXT");
+    // VkDebugUtilsLabelEXT debugLabelInfo{};
+    // debugLabelInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    // debugLabelInfo.pLabelName = "fkldsajflksajd";
+    // debugLabelInfo.color[1] = 1.0;
+    // debugLabelInfo.color[3] = 1.0f;
+
+    // pfnQueueDebugBegin(compute_queue_, &debugLabelInfo);
+    StopWatch sw;
     BAIL_ON_VK_BAD_RESULT(vkQueueSubmit(compute_queue_, /*submitCount=*/1,
                                         &submitInfo, /*fence=*/VK_NULL_HANDLE),
                           "failed to submit command buffer");
+    // pfnQueueDebugEnd(compute_queue_);
+    // vkWaitForFences(device_, 1, &sync_fence_, VK_TRUE, UINT64_MAX);
+    // vkResetFences(device_, 1, &sync_fence_);
+    vkQueueWaitIdle(compute_queue_);
+    auto dur = sw.GetMicros();
+
+    TI_INFO("running {} took {} us", name_, dur);
+    TI_INFO("<<<<<<<<<<<<<<<<<<<<<");
   }
 
  private:
@@ -491,19 +551,59 @@ class UserVulkanKernel {
     BAIL_ON_VK_BAD_RESULT(vkBeginCommandBuffer(commandBuffer_, &beginInfo),
                           "failed to begin recording command buffer");
 
+    auto pfnCmdDebugBegin =
+        (PFN_vkCmdBeginDebugUtilsLabelEXT)vkGetDeviceProcAddr(
+            device_, "vkCmdBeginDebugUtilsLabelEXT");
+    TI_ASSERT_INFO(pfnCmdDebugBegin != nullptr,
+                   "Cannot find vkCmdBeginDebugUtilsLabelEXT");
+    auto pfnCmdDebugEnd = (PFN_vkCmdEndDebugUtilsLabelEXT)vkGetDeviceProcAddr(
+        device_, "vkCmdEndDebugUtilsLabelEXT");
+    TI_ASSERT_INFO(pfnCmdDebugEnd != nullptr,
+                   "Cannot find vkCmdEndDebugUtilsLabelEXT");
+    auto pfnCmdDebugInsert =
+        (PFN_vkCmdInsertDebugUtilsLabelEXT)vkGetDeviceProcAddr(
+            device_, "vkCmdInsertDebugUtilsLabelEXT");
+    TI_ASSERT_INFO(pfnCmdDebugInsert != nullptr,
+                   "Cannot find vkCmdInsertDebugUtilsLabelEXT");
+
+    const auto *attribs = params.attribs;
+    VkDebugUtilsLabelEXT debugLabelInfo{};
+    debugLabelInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    debugLabelInfo.pLabelName = attribs->name.c_str();
+    pfnCmdDebugBegin(commandBuffer_, &debugLabelInfo);
+    pfnCmdDebugInsert(commandBuffer_, &debugLabelInfo);
     vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
                       pipeline_);
     vkCmdBindDescriptorSets(
         commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout_,
         /*firstSet=*/0, /*descriptorSetCount=*/1, &descriptorSet_,
         /*dynamicOffsetCount=*/0, /*pDynamicOffsets=*/nullptr);
-    vkCmdDispatch(commandBuffer_, params.attribs->advisory_total_num_threads,
+    const auto group_x = attribs->advisory_total_num_threads /
+                         attribs->advisory_num_threads_per_group;
+    // const auto group_x = attribs->advisory_total_num_threads;
+    TI_INFO(
+        "created buffer for kernel={} total_num={} local_group_size={} "
+        "num_group_x={}",
+        attribs->name, attribs->advisory_total_num_threads,
+        attribs->advisory_num_threads_per_group, group_x);
+    vkCmdDispatch(commandBuffer_, group_x,
                   /*groupCountY=*/1,
                   /*groupCountZ=*/1);
+    pfnCmdDebugEnd(commandBuffer_);
     BAIL_ON_VK_BAD_RESULT(vkEndCommandBuffer(commandBuffer_),
                           "failed to record command buffer");
   }
 
+  void CreateSyncObjects() {
+    VkFenceCreateInfo fence_info{};
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fence_info.flags = 0;
+    BAIL_ON_VK_BAD_RESULT(
+        vkCreateFence(device_, &fence_info, nullptr, &sync_fence_),
+        "failed to create sync fence");
+  }
+
+  std::string name_;
   VkDevice device_;        // not owned
   VkQueue compute_queue_;  // not owned
   VkDescriptorSetLayout descriptorSetLayout_;
@@ -512,6 +612,7 @@ class UserVulkanKernel {
   VkDescriptorPool descriptorPool_;
   VkDescriptorSet descriptorSet_;
   VkCommandBuffer commandBuffer_;
+  VkFence sync_fence_;
 };
 
 class HostDeviceContextBlitter {
@@ -571,13 +672,16 @@ class HostDeviceContextBlitter {
     host_result_buffer_[i] =                                \
         taichi_union_cast_with_different_sizes<uint64>(d);  \
   }
-
+    StopWatch sw;
     for (int i = 0; i < ctx_attribs_->args().size(); ++i) {
       const auto &arg = ctx_attribs_->args()[i];
       char *device_ptr = device_base + arg.offset_in_mem;
+      sw.GetMicros();
       if (arg.is_array) {
         void *host_ptr = host_ctx_->get_arg<void *>(i);
         std::memcpy(host_ptr, device_ptr, arg.stride);
+        auto dur = sw.GetMicros();
+        // TI_INFO("D2H arg array i={} duration={} us", i, dur);
       }
     }
     for (int i = 0; i < ctx_attribs_->rets().size(); ++i) {
@@ -586,10 +690,13 @@ class HostDeviceContextBlitter {
       const auto &ret = ctx_attribs_->rets()[i];
       char *device_ptr = device_base + ret.offset_in_mem;
       const auto dt = ret.dt;
+      sw.GetMicros();
 
       if (ret.is_array) {
         void *host_ptr = host_ctx_->get_arg<void *>(i);
         std::memcpy(host_ptr, device_ptr, ret.stride);
+        auto dur = sw.GetMicros();
+        // TI_INFO("D2H ret array i={} duration={} us", i, dur);
       }
       TO_HOST(i32, int32)
       TO_HOST(u32, uint32)
@@ -690,6 +797,7 @@ class VkRuntime ::Impl {
     PickPhysicalDevice();
     CreateLogicalDevice();
     CreateCommandPool();
+    CreateSyncObjects();
     init_memory_pool(params);
     init_vk_buffers();
   }
@@ -706,6 +814,7 @@ class VkRuntime ::Impl {
       DestroyDebugUtilsMessengerEXT(instance_, debugMessenger_,
                                     kNoVkAllocCallbacks);
     }
+    vkDestroyFence(device_, sync_fence_, kNoVkAllocCallbacks);
     vkDestroyCommandPool(device_, command_pool_, kNoVkAllocCallbacks);
     vkDestroyDevice(device_, kNoVkAllocCallbacks);
     vkDestroyInstance(instance_, kNoVkAllocCallbacks);
@@ -746,17 +855,21 @@ class VkRuntime ::Impl {
       TI_ASSERT(ti_kernel->ctx_buffer_ != nullptr);
       ctx_blitter->host_to_device();
     }
+    int i = 0;
     for (auto &vk : ti_kernel->vk_kernels) {
       vk->launch();
+      pending_kernels_.push_back(
+          ti_kernel->ti_kernel_attribs.tasks_attribs[i].name);
+      ++i;
     }
     if (ctx_blitter) {
-      synchronize();
+      sync(/*for_ctx=*/true);
       ctx_blitter->device_to_host();
     }
   }
 
   void synchronize() {
-    vkQueueWaitIdle(compute_queue_);
+    sync(/*for_ctx=*/false);
   }
 
   VkBufferWithMemory *root_buffer() {
@@ -768,6 +881,18 @@ class VkRuntime ::Impl {
   }
 
  private:
+  void sync(bool for_ctx) {
+    return;
+
+    vkQueueWaitIdle(compute_queue_);
+    // BAIL_ON_VK_BAD_RESULT(vkQueueSubmit(compute_queue_, /*submitCount=*/0,
+    //                                     nullptr, /*fence=*/sync_fence_),
+    //                       "failed to submit dummy sync");
+    // vkWaitForFences(device_, 1, &sync_fence_, VK_TRUE, UINT64_MAX);
+    // vkResetFences(device_, 1, &sync_fence_);
+    pending_kernels_.clear();
+  }
+
   void CreateInstance() {
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -785,10 +910,10 @@ class VkRuntime ::Impl {
       TI_ASSERT_INFO(CheckValidationLayerSupport(),
                      "validation layers requested but not available");
     }
-    for (const auto &ext : GetInstanceExtensionProperties()) {
-      std::cout << "ext=" << ext.extensionName << " spec=" << ext.specVersion
-                << std::endl;
-    }
+    // for (const auto &ext : GetInstanceExtensionProperties()) {
+    //   std::cout << "instancce ext=" << ext.extensionName
+    //             << " spec=" << ext.specVersion << std::endl;
+    // }
     VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
 
     if constexpr (kEnableValidationLayers) {
@@ -841,6 +966,10 @@ class VkRuntime ::Impl {
                    "failed to find a suitable GPU");
 
     queueFamilyIndices_ = FindQueueFamilies(physicalDevice_);
+    // auto props = GetDeviceExtensionProperties(physicalDevice_);
+    // for (const auto &p : props) {
+    //   std::cout << "  device ext=" << p.extensionName << std::endl;
+    // }
   }
 
   void CreateLogicalDevice() {
@@ -885,15 +1014,25 @@ class VkRuntime ::Impl {
         "failed to create command pool");
   }
 
+  void CreateSyncObjects() {
+    VkFenceCreateInfo fence_info{};
+    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    // fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    BAIL_ON_VK_BAD_RESULT(
+        vkCreateFence(device_, &fence_info, nullptr, &sync_fence_),
+        "failed to create sync fence");
+  }
+
   void init_memory_pool(const Params &params) {
     LinearVkMemoryPool::Params mp_params;
     mp_params.physicalDevice = physicalDevice_;
     mp_params.device = device_;
     /*mp_params.poolSize =
         (params.config->device_memory_GB * 1024 * 1024 * 1024ULL);*/
-    mp_params.poolSize = 100 * 1024 * 1024;
+    mp_params.poolSize = 10 * 1024 * 1024;
     mp_params.requiredProperties = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    // mp_params.requiredProperties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     mp_params.computeQueueFamilyIndex =
         queueFamilyIndices_.computeFamily.value();
 
@@ -926,6 +1065,7 @@ class VkRuntime ::Impl {
   VkDevice device_;
   VkQueue compute_queue_;
   VkCommandPool command_pool_;
+  VkFence sync_fence_;
   GlslToSpirvCompiler spv_compiler_;
 
   std::unique_ptr<LinearVkMemoryPool> memory_pool_;
@@ -933,6 +1073,7 @@ class VkRuntime ::Impl {
   std::unique_ptr<VkBufferWithMemory> global_tmps_buffer_;
 
   std::vector<std::unique_ptr<CompiledTaichiKernel>> ti_kernels_;
+  std::vector<std::string> pending_kernels_;
 };
 
 #else
