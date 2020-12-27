@@ -538,7 +538,7 @@ def is_arch_supported(arch):
     arch_table = {
         cuda: core.with_cuda,
         metal: core.with_metal,
-        opengl: core.with_opengl,
+        opengl: lambda: True,
         cc: core.with_cc,
         cpu: lambda: True,
         vulkan: lambda: True,

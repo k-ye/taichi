@@ -26,6 +26,9 @@ class VkBufferWithMemory {
     TI_ASSERT(buffer_ != VK_NULL_HANDLE);
     TI_ASSERT(size_ > 0);
     TI_ASSERT(backing_memory_ != VK_NULL_HANDLE);
+
+    vkMapMemory(device_, backing_memory_, offset_in_mem_, size_, /*flags=*/0,
+                &data_);
   }
 
   // Just use std::unique_ptr to save all the trouble from crafting move ctors
@@ -55,13 +58,7 @@ class VkBufferWithMemory {
 
   class Mapped {
    public:
-    explicit Mapped(VkBufferWithMemory *buf) : buf_(buf), data_(nullptr) {
-      vkMapMemory(buf_->device_, buf_->backing_memory_, buf_->offset_in_mem(),
-                  buf_->size(), /*flags=*/0, &data_);
-    }
-
-    ~Mapped() {
-      vkUnmapMemory(buf_->device_, buf_->backing_memory_);
+    explicit Mapped(void *data) : data_(data) {
     }
 
     void *data() const {
@@ -69,12 +66,12 @@ class VkBufferWithMemory {
     }
 
    private:
-    VkBufferWithMemory *const buf_;  // not owned
+    // VkBufferWithMemory *const buf_;  // not owned
     void *data_;
   };
 
   Mapped map_mem() {
-    return Mapped(this);
+    return Mapped(data_);
   }
 
  private:
@@ -84,6 +81,7 @@ class VkBufferWithMemory {
   VkDeviceMemory backing_memory_ = VK_NULL_HANDLE;
   VkDeviceSize size_ = 0;
   VkDeviceSize offset_in_mem_ = 0;
+  void *data_;
 };
 
 struct SpirvCodeView {
@@ -105,11 +103,11 @@ std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
 class VulkanEnvSettings {
  public:
   static constexpr uint32_t kApiVersion() {
-    return VK_API_VERSION_1_2;
+    return VK_API_VERSION_1_0;
   }
 
   static constexpr shaderc_env_version kShadercEnvVersion() {
-    return shaderc_env_version_vulkan_1_2;
+    return shaderc_env_version_vulkan_1_0;
   }
 };
 
