@@ -16,6 +16,8 @@ void DynamicLoader::load_dll(const std::string &dll_path) {
 #ifdef WIN32
   dll = (HMODULE)LoadLibraryA(dll_path.c_str());
 #else
+  // Default search paths are included in "/etc/ld.so.conf"
+  // https://stackoverflow.com/a/8193668/12003165
   dll = dlopen(dll_path.c_str(), RTLD_LAZY);
 #endif
 }

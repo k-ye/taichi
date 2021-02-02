@@ -141,6 +141,19 @@ def test_append_ret_value():
 
 @ti_support_non_top_dynamic
 def test_dense_dynamic():
+    # 1. It appears that <= CUDA 11.1 has a weird bug, the end result
+    # being that appending to Taichi's dynamic node messes up its length. See
+    # https://stackoverflow.com/questions/65995357/cuda-spinlock-implementation-with-independent-thread-scheduling-supported
+    # 2. Unfortunately, even if I fall back to the warp lock impl, i.e.
+    # https://github.com/taichi-dev/taichi/blob/d1061750485a7f31bb3b0f824182f1c497c70051/taichi/runtime/llvm/locked_task.h#L29
+    # the test still failed :( So lock is *a* problem. We need to see if 11.2
+    # can solve them all.
+    # 3. 11010 maps to '11.1'. The minor version comprises the
+    # last three digits. See CUDA's deviceQuery example:
+    # https://github.com/NVIDIA/cuda-samples/blob/b882fa00ee7151134cd40b6ef01a5a9af8fe8fa9/Samples/deviceQuery/deviceQuery.cpp#L106-L108
+    if ti.cfg.arch == ti.cuda and ti.core.query_int64(
+            'cuda_runtime_version') <= 11010:
+        return
     n = 128
     x = ti.field(ti.i32)
     l = ti.field(ti.i32, shape=n)

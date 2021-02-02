@@ -369,15 +369,25 @@ std::unique_ptr<llvm::Module> TaichiLLVMContext::clone_runtime_module() {
       runtime_module->setTargetTriple("nvptx64-nvidia-cuda");
 
 #if defined(TI_WITH_CUDA)
-      auto func = runtime_module->getFunction("cuda_compute_capability");
-      TI_ERROR_UNLESS(func, "Function cuda_compute_capability not found");
-      func->deleteBody();
-      auto bb = llvm::BasicBlock::Create(*ctx, "entry", func);
-      IRBuilder<> builder(*ctx);
-      builder.SetInsertPoint(bb);
-      builder.CreateRet(
-          get_constant(CUDAContext::get_instance().get_compute_capability()));
-      TaichiLLVMContext::mark_inline(func);
+      auto substitue_cuda_constant_func = [&runtime_module, ctx, this](
+                                              const std::string &stub_func_name,
+                                              int c) {
+        auto func = runtime_module->getFunction("cuda_compute_capability");
+        TI_ERROR_UNLESS(func, "Function cuda_compute_capability not found");
+        func->deleteBody();
+        auto bb = llvm::BasicBlock::Create(*ctx, "entry", func);
+        IRBuilder<> builder(*ctx);
+        builder.SetInsertPoint(bb);
+        builder.CreateRet(
+            get_constant(CUDAContext::get_instance().get_compute_capability()));
+        TaichiLLVMContext::mark_inline(func);
+      };
+      substitue_cuda_constant_func(
+          "cuda_compute_capability",
+          CUDAContext::get_instance().get_compute_capability());
+      substitue_cuda_constant_func(
+          "cuda_runtime_version",
+          CUDAContext::get_instance().get_runtime_version());
 #endif
 
       auto patch_intrinsic = [&](std::string name, Intrinsic::ID intrin,

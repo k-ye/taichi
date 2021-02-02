@@ -22,6 +22,7 @@ class CUDAContext {
   void *context;
   int dev_count;
   int compute_capability;
+  int runtime_version;
   std::string mcpu;
   std::mutex lock;
   KernelProfilerBase *profiler;
@@ -58,6 +59,10 @@ class CUDAContext {
 
   int get_compute_capability() const {
     return compute_capability;
+  }
+
+  int get_runtime_version() const {
+    return runtime_version;
   }
 
   ~CUDAContext();

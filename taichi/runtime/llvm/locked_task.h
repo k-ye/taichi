@@ -25,6 +25,10 @@ class lock_guard {
       }
     };
 
+    // Compute capability 70 introduces Independent Thread Scheduling,
+    // meaning that threads within a warp do not have to execute in lock step.
+    // This allows the traditional spin lock implementation on CPUs (previously
+    // such impl would just deadlock).
     if (cuda_compute_capability() < 70) {
       // Note that unfortunately critical sections on pre-Pascal (inclusive)
       // devices has undefined behavior (deadlock or not), if more than one

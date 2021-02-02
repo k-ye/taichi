@@ -972,6 +972,10 @@ int32 cuda_compute_capability() {
   return 0;
 }
 
+int32 cuda_runtime_version() {
+  return 0;
+}
+
 int32 cuda_ballot(bool bit) {
   return 0;
 }

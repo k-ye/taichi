@@ -49,6 +49,13 @@ CUDAContext::CUDAContext()
   mcpu = fmt::format("sm_{}", compute_capability);
 
   TI_TRACE("Emitting CUDA code for {}", mcpu);
+  // Better not to depend on dlopen's default search strategy...
+  // https://stackoverflow.com/a/9163440/12003165
+  DynamicLoader rt_loader("libcudart.so");
+  runtime_version = 0;
+  uint32_t (*runtime_get_version)(int *);
+  rt_loader.load_function("cudaRuntimeGetVersion", runtime_get_version);
+  runtime_get_version(&runtime_version);
 }
 
 std::size_t CUDAContext::get_total_memory() {
