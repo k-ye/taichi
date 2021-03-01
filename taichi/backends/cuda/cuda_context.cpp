@@ -6,6 +6,7 @@
 
 #include "taichi/lang_util.h"
 #include "taichi/program/program.h"
+#include "taichi/util/environ_config.h"
 #include "taichi/system/threading.h"
 #include "taichi/backends/cuda/cuda_driver.h"
 
@@ -17,7 +18,34 @@ CUDAContext::CUDAContext()
   dev_count = 0;
   driver.init(0);
   driver.device_get_count(&dev_count);
-  driver.device_get(&device, 0);
+  // Unfortunately, at this point |current_program| is still not initialized.
+  // So we have to use an env variable.
+  if (get_environ_config("TI_REUSE_CUDA_CONTEXT", /*default_value=*/0)) {
+    // When the GPU device is configured as EXCLUSIVE_PROCESS mode, only one
+    // CUDA context is allowed to be created per device. In this case, the only
+    // possible solution for using the CUDA backend is to retrieve and to reuse
+    // the current context of the calling CPU thread. See #2190.
+    void *existing_context = nullptr;
+    driver.context_get_current(&existing_context);
+    if (existing_context) {
+      // TODO: CUDevice is an alias of uint, not a pointer.
+      void *existing_device = nullptr;
+      driver.context_get_device(&existing_device);
+
+      device = existing_device;
+      context = existing_context;
+    } else {
+      TI_WARN(
+          "Failed to find any existing CUDA context while "
+          "TI_REUSE_CUDA_CONTEXT=1");
+    }
+  }
+  if (context == nullptr) {
+    // TODO: Support a passed-in device ID.
+    // TODO: Check the returned CUresult.
+    driver.device_get(&device, /*ordinal=*/0);
+    driver.context_create(&context, /*flags=*/0u, device);
+  }
 
   char name[128];
   driver.device_get_name(name, 128, device);
@@ -31,7 +59,6 @@ CUDAContext::CUDAContext()
       &cc_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device);
 
   TI_TRACE("CUDA Device Compute Capability: {}.{}", cc_major, cc_minor);
-  driver.context_create(&context, 0, device);
 
   const auto GB = std::pow(1024.0, 3.0);
   TI_TRACE("Total memory {:.2f} GB; free memory {:.2f} GB",

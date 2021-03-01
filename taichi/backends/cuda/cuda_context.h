@@ -18,10 +18,10 @@ class CUDADriver;
 
 class CUDAContext {
  private:
-  void *device;
-  void *context;
-  int dev_count;
-  int compute_capability;
+  void *device = nullptr;
+  void *context = nullptr;
+  int dev_count = 0;
+  int compute_capability = 0;
   std::string mcpu;
   std::mutex lock;
   KernelProfilerBase *profiler;
