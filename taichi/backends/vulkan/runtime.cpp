@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "taichi/system/profiler.h"
 #include "taichi/math/arithmetic.h"
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
@@ -21,7 +22,7 @@ TLANG_NAMESPACE_BEGIN
 
 namespace vulkan {
 
-#define TI_WITH_VULKAN
+// #define TI_WITH_VULKAN
 #ifdef TI_WITH_VULKAN
 
 #define BAIL_ON_VK_BAD_RESULT(result, msg)        \
@@ -371,6 +372,10 @@ class UserVulkanKernel {
   }
 
   void launch() {
+    // if (name_.find("paint_") == 0) {
+    //   return;
+    // }
+    TI_AUTO_PROF;
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
@@ -628,9 +633,12 @@ class HostDeviceContextBlitter {
   }
 
   void host_to_device() {
+    return;
+    TI_AUTO_PROF;
     if (ctx_attribs_->empty()) {
       return;
     }
+    StopWatch sw;
     auto mapped = device_buffer_->map_mem();
     char *const device_base = reinterpret_cast<char *>(mapped.data());
 
@@ -657,10 +665,13 @@ class HostDeviceContextBlitter {
     char *device_ptr = device_base + ctx_attribs_->extra_args_mem_offset();
     std::memcpy(device_ptr, host_ctx_->extra_args,
                 ctx_attribs_->extra_args_bytes());
+    TI_INFO("H2D memory copy, duration={} us", sw.GetMicros());
 #undef TO_DEVICE
   }
 
   void device_to_host() {
+    return;
+    TI_AUTO_PROF;
     if (ctx_attribs_->empty()) {
       return;
     }
@@ -676,12 +687,9 @@ class HostDeviceContextBlitter {
     for (int i = 0; i < ctx_attribs_->args().size(); ++i) {
       const auto &arg = ctx_attribs_->args()[i];
       char *device_ptr = device_base + arg.offset_in_mem;
-      sw.GetMicros();
       if (arg.is_array) {
         void *host_ptr = host_ctx_->get_arg<void *>(i);
         std::memcpy(host_ptr, device_ptr, arg.stride);
-        auto dur = sw.GetMicros();
-        // TI_INFO("D2H arg array i={} duration={} us", i, dur);
       }
     }
     for (int i = 0; i < ctx_attribs_->rets().size(); ++i) {
@@ -690,13 +698,10 @@ class HostDeviceContextBlitter {
       const auto &ret = ctx_attribs_->rets()[i];
       char *device_ptr = device_base + ret.offset_in_mem;
       const auto dt = ret.dt;
-      sw.GetMicros();
 
       if (ret.is_array) {
         void *host_ptr = host_ctx_->get_arg<void *>(i);
         std::memcpy(host_ptr, device_ptr, ret.stride);
-        auto dur = sw.GetMicros();
-        // TI_INFO("D2H ret array i={} duration={} us", i, dur);
       }
       TO_HOST(i32, int32)
       TO_HOST(u32, uint32)
@@ -706,6 +711,8 @@ class HostDeviceContextBlitter {
                  data_type_name(ret.dt));
       }
     }
+    TI_INFO("D2H memory copy, duration={} us", sw.GetMicros());
+    
 #undef TO_HOST
   }
 
