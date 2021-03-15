@@ -56,13 +56,14 @@ def paint(t: float):
         pixels[i, j] = 1 - iterations * 0.02
 
 
-gui = ti.GUI("Julia Set", res=(n * 2, n))
+if args.show_gui:
+  gui = ti.GUI("Julia Set", res=(n * 2, n))
+
 img = np.ascontiguousarray(
     np.zeros(res + (4, ), np.float32))
 for i in range(args.frames):
     paint(i * 0.03)
     p_np = pixels.to_numpy()
-    gui.set_image(p_np)
 
     if args.show_gui:
         # pass
@@ -70,6 +71,7 @@ for i in range(args.frames):
         # tensor_to_image(pixels, img)
         # ti.sync()
         # gui.set_image(pixels)
+        gui.set_image(p_np)
         gui.show()
     # import time
     # if i % 500 == 0:

@@ -371,40 +371,16 @@ class UserVulkanKernel {
   }
 
   void launch() {
+    TI_AUTO_PROF;
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &commandBuffer_;
 
-    // auto pfnQueueDebugBegin =
-    //     (PFN_vkQueueBeginDebugUtilsLabelEXT)vkGetDeviceProcAddr(
-    //         device_, "vkQueueBeginDebugUtilsLabelEXT");
-    // TI_ASSERT_INFO(pfnQueueDebugBegin != nullptr,
-    //                "Cannot find vkQueueBeginDebugUtilsLabelEXT");
-    // auto pfnQueueDebugEnd =
-    //     (PFN_vkQueueEndDebugUtilsLabelEXT)vkGetDeviceProcAddr(
-    //         device_, "vkQueueEndDebugUtilsLabelEXT");
-    // TI_ASSERT_INFO(pfnQueueDebugEnd != nullptr,
-    //                "Cannot find vkQueueEndDebugUtilsLabelEXT");
-    // VkDebugUtilsLabelEXT debugLabelInfo{};
-    // debugLabelInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
-    // debugLabelInfo.pLabelName = "fkldsajflksajd";
-    // debugLabelInfo.color[1] = 1.0;
-    // debugLabelInfo.color[3] = 1.0f;
-
-    // pfnQueueDebugBegin(compute_queue_, &debugLabelInfo);
     StopWatch sw;
     BAIL_ON_VK_BAD_RESULT(vkQueueSubmit(compute_queue_, /*submitCount=*/1,
                                         &submitInfo, /*fence=*/VK_NULL_HANDLE),
                           "failed to submit command buffer");
-    // pfnQueueDebugEnd(compute_queue_);
-    // vkWaitForFences(device_, 1, &sync_fence_, VK_TRUE, UINT64_MAX);
-    // vkResetFences(device_, 1, &sync_fence_);
-    vkQueueWaitIdle(compute_queue_);
-    auto dur = sw.GetMicros();
-
-    TI_INFO("running {} took {} us", name_, dur);
-    TI_INFO("<<<<<<<<<<<<<<<<<<<<<");
   }
 
  private:
@@ -882,14 +858,15 @@ class VkRuntime ::Impl {
 
  private:
   void sync(bool for_ctx) {
-    return;
-
+    if (pending_kernels_.empty()) {
+      return;
+    }
+    // return;
+    TI_AUTO_PROF;
+    StopWatch sw;
     vkQueueWaitIdle(compute_queue_);
-    // BAIL_ON_VK_BAD_RESULT(vkQueueSubmit(compute_queue_, /*submitCount=*/0,
-    //                                     nullptr, /*fence=*/sync_fence_),
-    //                       "failed to submit dummy sync");
-    // vkWaitForFences(device_, 1, &sync_fence_, VK_TRUE, UINT64_MAX);
-    // vkResetFences(device_, 1, &sync_fence_);
+    TI_INFO("running {} kernels took {} us", pending_kernels_.size(),
+            sw.GetMicros());
     pending_kernels_.clear();
   }
 
