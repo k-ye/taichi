@@ -462,7 +462,6 @@ void Program::materialize_layout() {
     vulkan_compiled_structs_ = vulkan::compile_snode_structs(*snode_root);
     vulkan::VkRuntime::Params params;
     params.config = &config;
-    params.snode_descriptors = &(vulkan_compiled_structs_->snode_descriptors);
     params.host_result_buffer = result_buffer;
     vulkan_runtime_ = std::make_unique<vulkan::VkRuntime>(std::move(params));
   }

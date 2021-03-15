@@ -2,7 +2,10 @@
 
 #include <spirv-tools/libspirv.hpp>
 
-TLANG_NAMESPACE_BEGIN
+#include "taichi/common/logging.h"
+
+namespace taichi {
+namespace lang {
 namespace vulkan {
 
 std::vector<VkExtensionProperties> GetInstanceExtensionProperties() {
@@ -52,4 +55,5 @@ std::optional<GlslToSpirvCompiler::SpirvBinary> GlslToSpirvCompiler::compile(
 }
 
 }  // namespace vulkan
-TLANG_NAMESPACE_END
+}  // namespace lang
+}  // namespace taichi

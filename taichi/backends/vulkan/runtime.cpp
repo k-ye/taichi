@@ -12,23 +12,39 @@
 #include <unordered_set>
 #include <vector>
 
+#ifndef IN_TAI_VULKAN
+
 #include "taichi/system/profiler.h"
-#include "taichi/math/arithmetic.h"
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
 #undef TI_RUNTIME_HOST
-
-TLANG_NAMESPACE_BEGIN
-
-namespace vulkan {
-
-#define TI_WITH_VULKAN
-#ifdef TI_WITH_VULKAN
 
 #define BAIL_ON_VK_BAD_RESULT(result, msg)        \
   do {                                            \
     TI_ERROR_IF(((result) != VK_SUCCESS), (msg)); \
   } while (0)
+
+#else
+#include <iostream>
+#define TI_AUTO_PROF
+#define TI_INFO(...)
+#define BAIL_ON_VK_BAD_RESULT(result, msg) \
+  do {                                     \
+    if ((result) != VK_SUCCESS) {          \
+      throw std::runtime_error((msg));     \
+    }                                      \
+  } while (0)
+
+#endif  // IN_TAI_VULKAN
+
+#include "taichi/math/arithmetic.h"
+
+namespace taichi {
+namespace lang {
+namespace vulkan {
+
+#define TI_WITH_VULKAN
+#ifdef TI_WITH_VULKAN
 
 namespace {
 
@@ -507,12 +523,15 @@ class UserVulkanKernel {
         /*dynamicOffsetCount=*/0, /*pDynamicOffsets=*/nullptr);
     const auto group_x = attribs->advisory_total_num_threads /
                          attribs->advisory_num_threads_per_group;
-    // const auto group_x = attribs->advisory_total_num_threads;
     TI_INFO(
-        "created buffer for kernel={} total_num={} local_group_size={} "
+        "Created command buffer for kernel={} total_num={} local_group_size={} "
         "num_group_x={}",
         attribs->name, attribs->advisory_total_num_threads,
         attribs->advisory_num_threads_per_group, group_x);
+    std::cout << "Created command buffer for kernel=" << attribs->name
+              << " total_num_threads=" << attribs->advisory_total_num_threads
+              << " local_group_size=" << attribs->advisory_num_threads_per_group
+              << " num_group_x=" << group_x << std::endl;
     vkCmdDispatch(commandBuffer_, group_x,
                   /*groupCountY=*/1,
                   /*groupCountZ=*/1);
@@ -676,9 +695,9 @@ class CompiledTaichiKernel {
   struct Params {
     const TaichiKernelAttributes *ti_kernel_attribs = nullptr;
     std::vector<GlslToSpirvCompiler::SpirvBinary> spirv_bins;
-    const SNodeDescriptorsMap *snode_descriptors = nullptr;
     VkBufferWithSize root_buffer;
     VkBufferWithSize global_tmps_buffer;
+    VkBufferWithSize context_buffer;
     NaiveVkBufferAllocator *vk_mem_pool = nullptr;
     VkDevice device = VK_NULL_HANDLE;
     VkQueue compute_queue = VK_NULL_HANDLE;
@@ -691,6 +710,7 @@ class CompiledTaichiKernel {
     InputBuffersMap input_buffers = {
         {BufferEnum::Root, ti_params.root_buffer},
         {BufferEnum::GlobalTmps, ti_params.global_tmps_buffer},
+        {BufferEnum::Context, ti_params.context_buffer},
     };
     if (!ti_kernel_attribs.ctx_attribs.empty()) {
       ctx_buffer_ = ti_params.vk_mem_pool->alloc_and_bind(
@@ -736,12 +756,9 @@ class CompiledTaichiKernel {
 class VkRuntime ::Impl {
  public:
   explicit Impl(const Params &params)
-      : config_(params.config),
-        snode_descriptors_(params.snode_descriptors),
-        host_result_buffer_(params.host_result_buffer) {
-    TI_ASSERT(config_ != nullptr);
-    TI_ASSERT(snode_descriptors_ != nullptr);
-    TI_ASSERT(host_result_buffer_ != nullptr);
+      : config_(params.config), host_result_buffer_(params.host_result_buffer) {
+    // TI_ASSERT(config_ != nullptr);
+    // TI_ASSERT(host_result_buffer_ != nullptr);
     CreateInstance();
     SetupDebugMessenger();
     PickPhysicalDevice();
@@ -756,6 +773,7 @@ class VkRuntime ::Impl {
       decltype(ti_kernels_) tmp;
       tmp.swap(ti_kernels_);
     }
+    vkDestroyBuffer(device_, fake_ctx_buffer_.buffer, kNoVkAllocCallbacks);
     vkDestroyBuffer(device_, global_tmps_buffer_.buffer, kNoVkAllocCallbacks);
     vkDestroyBuffer(device_, root_buffer_.buffer, kNoVkAllocCallbacks);
     memory_pool_.reset();
@@ -771,9 +789,9 @@ class VkRuntime ::Impl {
   KernelHandle register_taichi_kernel(RegisterParams reg_params) {
     CompiledTaichiKernel::Params params;
     params.ti_kernel_attribs = &(reg_params.kernel_attribs);
-    params.snode_descriptors = snode_descriptors_;
     params.root_buffer = root_buffer_;
     params.global_tmps_buffer = global_tmps_buffer_;
+    params.context_buffer = fake_ctx_buffer_;
     params.vk_mem_pool = memory_pool_.get();
     params.device = device_;
     params.compute_queue = compute_queue_;
@@ -818,14 +836,6 @@ class VkRuntime ::Impl {
 
   void synchronize() {
     sync(/*for_ctx=*/false);
-  }
-
-  VkBufferWithMemory *root_buffer() {
-    return nullptr;
-  }
-
-  VkBufferWithMemory *global_tmps_buffer() {
-    return nullptr;
   }
 
  private:
@@ -966,10 +976,10 @@ class VkRuntime ::Impl {
   void init_vk_buffers() {
     root_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
     global_tmps_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
+    fake_ctx_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
   }
 
   const CompileConfig *const config_;
-  const SNodeDescriptorsMap *const snode_descriptors_;
   uint64_t *const host_result_buffer_;
   VkInstance instance_{VK_NULL_HANDLE};
   VkDebugUtilsMessengerEXT debugMessenger_{VK_NULL_HANDLE};
@@ -984,6 +994,7 @@ class VkRuntime ::Impl {
   std::unique_ptr<NaiveVkBufferAllocator> memory_pool_{nullptr};
   VkBufferWithSize root_buffer_;
   VkBufferWithSize global_tmps_buffer_;
+  VkBufferWithSize fake_ctx_buffer_;
 
   std::vector<std::unique_ptr<CompiledTaichiKernel>> ti_kernels_;
   std::vector<std::string> pending_kernels_;
@@ -1009,13 +1020,6 @@ class VkRuntime::Impl {
   void synchronize() {
     TI_ERROR("Vulkan disabled");
   }
-
-  VkBufferWithMemory *root_buffer() {
-    return nullptr;
-  }
-  VkBufferWithMemory *global_tmps_buffer() {
-    return nullptr;
-  }
 };
 
 #endif  // TI_WITH_VULKAN
@@ -1040,13 +1044,6 @@ void VkRuntime::synchronize() {
   impl_->synchronize();
 }
 
-VkBufferWithMemory *VkRuntime::root_buffer() {
-  return impl_->root_buffer();
-}
-
-VkBufferWithMemory *VkRuntime::global_tmps_buffer() {
-  return impl_->global_tmps_buffer();
-}
-
 }  // namespace vulkan
-TLANG_NAMESPACE_END
+}  // namespace lang
+}  // namespace taichi

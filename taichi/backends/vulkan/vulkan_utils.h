@@ -6,11 +6,10 @@
 #include <optional>
 #include <vector>
 
-#include "taichi/lang_util.h"
-
-TLANG_NAMESPACE_BEGIN
+namespace taichi {
+namespace lang {
 namespace vulkan {
-
+#if 0
 class VkBufferWithMemory {
  public:
   VkBufferWithMemory(VkDevice device,
@@ -83,7 +82,7 @@ class VkBufferWithMemory {
   VkDeviceSize offset_in_mem_ = 0;
   void *data_;
 };
-
+#endif
 struct SpirvCodeView {
   const uint32_t *data = nullptr;
   size_t size = 0;
@@ -125,4 +124,5 @@ class GlslToSpirvCompiler {
 };
 
 }  // namespace vulkan
-TLANG_NAMESPACE_END
+}  // namespace lang
+}  // namespace taichi

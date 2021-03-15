@@ -1,14 +1,24 @@
 #pragma once
-#include "taichi/lang_util.h"
 
 #include <vector>
 
-#include "taichi/backends/vulkan/snode_struct_compiler.h"
+#ifndef IN_TAI_VULKAN
+
 #include "taichi/backends/vulkan/kernel_utils.h"
 #include "taichi/backends/vulkan/vulkan_utils.h"
 #include "taichi/program/compile_config.h"
 
-TLANG_NAMESPACE_BEGIN
+#else
+
+#include "src/utils.h"
+
+#endif  // IN_TAI_VULKAN
+
+namespace taichi {
+namespace lang {
+
+struct Context;
+
 namespace vulkan {
 
 class VkRuntime {
@@ -20,8 +30,6 @@ class VkRuntime {
     // CompiledSNodeStructs compiled_snode_structs;
     const CompileConfig *config = nullptr;
     uint64_t *host_result_buffer = nullptr;
-    // int root_id;
-    const SNodeDescriptorsMap *snode_descriptors = nullptr;
   };
 
   explicit VkRuntime(const Params &params);
@@ -41,17 +49,14 @@ class VkRuntime {
 
   KernelHandle register_taichi_kernel(RegisterParams params);
 
-  void launch_kernel(KernelHandle handle, Context* host_ctx);
+  void launch_kernel(KernelHandle handle, Context *host_ctx);
 
   void synchronize();
-
-  VkBufferWithMemory *root_buffer();
-  VkBufferWithMemory *global_tmps_buffer();
 
  private:
   std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace vulkan
-
-TLANG_NAMESPACE_END
+}  // namespace lang
+}  // namespace taichi

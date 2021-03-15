@@ -10,7 +10,6 @@
 TLANG_NAMESPACE_BEGIN
 
 class Kernel;
-class SNode;
 
 namespace vulkan {
 
