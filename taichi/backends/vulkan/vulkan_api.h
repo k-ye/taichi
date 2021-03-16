@@ -17,16 +17,26 @@ struct SpirvCodeView {
   SpirvCodeView() = default;
 
   explicit SpirvCodeView(const std::vector<uint32_t> &code)
-      : data(code.data()), size(code.size() * sizeof(uint32_t)) {}
+      : data(code.data()), size(code.size() * sizeof(uint32_t)) {
+  }
 };
 
 struct VulkanQueueFamilyIndices {
   std::optional<uint32_t> compute_family;
   // Do we also need a transfer_family?
 
-  bool is_complete() const { return compute_family.has_value(); }
+  bool is_complete() const {
+    return compute_family.has_value();
+  }
 };
 
+// Many classes here are inspired by TVM's runtime
+// https://github.com/apache/tvm/tree/main/src/runtime/vulkan
+
+// VulkanDevice maps to a (VkDevice, VkQueue) tuple. Right now we only use
+// a single queue from a single device, so it does not make a difference to
+// separate the queue from the device. This is similar to using a single CUDA
+// stream.
 class VulkanDevice {
  public:
   struct Params {
@@ -35,13 +45,21 @@ class VulkanDevice {
   explicit VulkanDevice(const Params &params);
   ~VulkanDevice();
 
-  VkPhysicalDevice physical_device() const { return physical_device_; }
-  VkDevice device() const { return device_; }
+  VkPhysicalDevice physical_device() const {
+    return physical_device_;
+  }
+  VkDevice device() const {
+    return device_;
+  }
   const VulkanQueueFamilyIndices &queue_family_indices() const {
     return queue_family_indices_;
   }
-  VkQueue compute_queue() const { return compute_queue_; }
-  VkCommandPool command_pool() const { return command_pool_; }
+  VkQueue compute_queue() const {
+    return compute_queue_;
+  }
+  VkCommandPool command_pool() const {
+    return command_pool_;
+  }
 
  private:
   void create_instance(const Params &params);
@@ -62,6 +80,10 @@ class VulkanDevice {
   VkCommandPool command_pool_{VK_NULL_HANDLE};
 };
 
+// VulkanPipeline maps to a VkPipeline, or a SPIR-V module (a GLSL compute
+// shader). Because Taichi's buffers are all pre-allocated upon startup, we
+// only need to set up the descriptor set (bind the buffers via
+// VkWriteDescriptorSet) once during the pipeline initialization.
 class VulkanPipeline {
  public:
   struct BufferBinding {
@@ -78,9 +100,15 @@ class VulkanPipeline {
   explicit VulkanPipeline(const Params &params);
   ~VulkanPipeline();
 
-  VkPipelineLayout pipeline_layout() const { return pipeline_layout_; }
-  VkPipeline pipeline() const { return pipeline_; }
-  const VkDescriptorSet &descriptor_set() const { return descriptor_set_; }
+  VkPipelineLayout pipeline_layout() const {
+    return pipeline_layout_;
+  }
+  VkPipeline pipeline() const {
+    return pipeline_;
+  }
+  const VkDescriptorSet &descriptor_set() const {
+    return descriptor_set_;
+  }
 
  private:
   void create_descriptor_set_layout(const Params &params);
@@ -103,6 +131,9 @@ class VulkanPipeline {
   VkDescriptorSet descriptor_set_;
 };
 
+// VulkanCommandBuilder builds a VkCommandBuffer by recording a given series of
+// VulkanPipelines. The workgroup count needs to be known at recording time.
+// TODO: Do we ever need to adjust the workgroup count at runtime?
 class VulkanCommandBuilder {
  public:
   explicit VulkanCommandBuilder(const VulkanDevice *device);
@@ -120,6 +151,9 @@ class VulkanCommandBuilder {
   VkCommandBuffer command_buffer_{VK_NULL_HANDLE};
 };
 
+// A vulkan stream models the asynchronous model of GPU execution queue.
+// Commands are submitted via launch() and executed asynchronously. Sync blocks
+// the host until all the commands have completed execution.
 class VulkanStream {
  public:
   VulkanStream(const VulkanDevice *device);

@@ -20,10 +20,10 @@ std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
 
 class VulkanEnvSettings {
  public:
-  static constexpr uint32_t kApiVersion() { return VK_API_VERSION_1_0; }
+  static constexpr uint32_t kApiVersion() { return VK_API_VERSION_1_2; }
 
   static constexpr shaderc_env_version kShadercEnvVersion() {
-    return shaderc_env_version_vulkan_1_0;
+    return shaderc_env_version_vulkan_1_2;
   }
 };
 

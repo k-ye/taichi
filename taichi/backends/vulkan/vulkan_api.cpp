@@ -50,10 +50,10 @@ bool check_validation_layer_support() {
 VKAPI_ATTR VkBool32 VKAPI_CALL
 vk_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
                   VkDebugUtilsMessageTypeFlagsEXT message_type,
-                  const VkDebugUtilsMessengerCallbackDataEXT *p_callbackData,
+                  const VkDebugUtilsMessengerCallbackDataEXT *p_callback_data,
                   void *p_user_data) {
   if (message_severity > VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-    std::cerr << "validation layer: " << p_callbackData->pMessage << std::endl;
+    std::cerr << "validation layer: " << p_callback_data->pMessage << std::endl;
   }
   return VK_FALSE;
 }
@@ -88,7 +88,8 @@ VkResult create_debug_utils_messenger_ext(
 }
 
 void destroy_debug_utils_messenger_ext(
-    VkInstance instance, VkDebugUtilsMessengerEXT debug_messenger,
+    VkInstance instance,
+    VkDebugUtilsMessengerEXT debug_messenger,
     const VkAllocationCallbacks *p_allocator) {
   auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
       instance, "vkDestroyDebugUtilsMessengerEXT");
@@ -235,12 +236,12 @@ void VulkanDevice::setup_debug_messenger() {
 }
 
 void VulkanDevice::pick_physical_device() {
-  uint32_t deviceCount = 0;
-  vkEnumeratePhysicalDevices(instance_, &deviceCount, nullptr);
-  TI_ASSERT_INFO(deviceCount > 0, "failed to find GPUs with Vulkan support");
+  uint32_t device_count = 0;
+  vkEnumeratePhysicalDevices(instance_, &device_count, nullptr);
+  TI_ASSERT_INFO(device_count > 0, "failed to find GPUs with Vulkan support");
 
-  std::vector<VkPhysicalDevice> devices(deviceCount);
-  vkEnumeratePhysicalDevices(instance_, &deviceCount, devices.data());
+  std::vector<VkPhysicalDevice> devices(device_count);
+  vkEnumeratePhysicalDevices(instance_, &device_count, devices.data());
   physical_device_ = VK_NULL_HANDLE;
   for (const auto &device : devices) {
     if (is_device_suitable(device)) {
@@ -268,8 +269,8 @@ void VulkanDevice::create_logical_device() {
   create_info.pQueueCreateInfos = &queue_create_info;
   create_info.queueCreateInfoCount = 1;
 
-  VkPhysicalDeviceFeatures deviceFeatures{};
-  create_info.pEnabledFeatures = &deviceFeatures;
+  VkPhysicalDeviceFeatures device_deatures{};
+  create_info.pEnabledFeatures = &device_deatures;
   create_info.enabledExtensionCount = 0;
 
   if constexpr (kEnableValidationLayers) {
@@ -377,6 +378,7 @@ void VulkanPipeline::create_descriptor_pool(const Params &params) {
   pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   // This is the total number of descriptors we will allocate from this pool,
   // across all the descriptor sets.
+  // https://stackoverflow.com/a/51716660/12003165
   pool_size.descriptorCount = params.buffer_bindings.size();
 
   VkDescriptorPoolCreateInfo pool_info{};
@@ -405,14 +407,14 @@ void VulkanPipeline::create_descriptor_sets(const Params &params) {
   std::vector<VkDescriptorBufferInfo> descriptor_buffer_infos;
   descriptor_buffer_infos.reserve(buffer_binds.size());
   for (const auto &bb : buffer_binds) {
-    VkDescriptorBufferInfo bufferInfo{};
-    bufferInfo.buffer = bb.buffer;
+    VkDescriptorBufferInfo buffer_info{};
+    buffer_info.buffer = bb.buffer;
     // Note that this is the offset within the buffer itself, not the offset
     // of this buffer within its backing memory!
-    bufferInfo.offset = 0;
+    buffer_info.offset = 0;
     // https://github.com/apache/tvm/blob/d288bbc5df3660355adbf97f2f84ecd232e269ff/src/runtime/vulkan/vulkan.cc#L1073
-    bufferInfo.range = VK_WHOLE_SIZE;
-    descriptor_buffer_infos.push_back(bufferInfo);
+    buffer_info.range = VK_WHOLE_SIZE;
+    descriptor_buffer_infos.push_back(buffer_info);
   }
 
   std::vector<VkWriteDescriptorSet> descriptor_writes;
@@ -506,7 +508,8 @@ VkCommandBuffer VulkanCommandBuilder::build() {
   return res;
 }
 
-VulkanStream::VulkanStream(const VulkanDevice *device) : device_(device) {}
+VulkanStream::VulkanStream(const VulkanDevice *device) : device_(device) {
+}
 
 void VulkanStream::launch(VkCommandBuffer command) {
   VkSubmitInfo submit_info{};
@@ -520,7 +523,9 @@ void VulkanStream::launch(VkCommandBuffer command) {
       "failed to submit command buffer");
 }
 
-void VulkanStream::synchronize() { vkQueueWaitIdle(device_->compute_queue()); }
+void VulkanStream::synchronize() {
+  vkQueueWaitIdle(device_->compute_queue());
+}
 
 }  // namespace vulkan
 }  // namespace lang
