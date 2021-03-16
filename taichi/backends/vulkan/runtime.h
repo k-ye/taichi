@@ -8,7 +8,9 @@
 #include "taichi/backends/vulkan/vulkan_utils.h"
 #include "taichi/program/compile_config.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi {
+namespace lang {
+
 namespace vulkan {
 
 class VkRuntime {
@@ -41,17 +43,14 @@ class VkRuntime {
 
   KernelHandle register_taichi_kernel(RegisterParams params);
 
-  void launch_kernel(KernelHandle handle, Context* host_ctx);
+  void launch_kernel(KernelHandle handle, Context *host_ctx);
 
   void synchronize();
-
-  VkBufferWithMemory *root_buffer();
-  VkBufferWithMemory *global_tmps_buffer();
 
  private:
   std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace vulkan
-
-TLANG_NAMESPACE_END
+}  // namespace lang
+}  // namespace taichi

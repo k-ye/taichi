@@ -2,7 +2,8 @@
 
 #include <spirv-tools/libspirv.hpp>
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi {
+namespace lang {
 namespace vulkan {
 
 std::vector<VkExtensionProperties> GetInstanceExtensionProperties() {
@@ -27,30 +28,27 @@ std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
   return extensions;
 }
 
-GlslToSpirvCompiler::GlslToSpirvCompiler() {
+GlslToSpirvCompiler::GlslToSpirvCompiler(const ErrorHandler &err_handler)
+    : err_handler_(err_handler) {
   opts_.SetTargetEnvironment(shaderc_target_env_vulkan,
                              VulkanEnvSettings::kShadercEnvVersion());
-  // opts_.SetOptimizationLevel(shaderc_optimization_level_performance);
+  opts_.SetOptimizationLevel(shaderc_optimization_level_performance);
 }
 
 std::optional<GlslToSpirvCompiler::SpirvBinary> GlslToSpirvCompiler::compile(
-    const std::string &glsl,
-    const std::string kernel_name) {
-  TI_INFO("Compiling GLSL -> SPIR-V for kernel={}\n{}", kernel_name, glsl);
+    const std::string &glsl_src,
+    const std::string &shader_name) {
   auto spv_result =
-      compiler_.CompileGlslToSpv(glsl, shaderc_glsl_default_compute_shader,
-                                 /*input_file_name=*/kernel_name.c_str(),
+      compiler_.CompileGlslToSpv(glsl_src, shaderc_glsl_default_compute_shader,
+                                 /*input_file_name=*/shader_name.c_str(),
                                  /*entry_point_name=*/"main", opts_);
   if (spv_result.GetCompilationStatus() != shaderc_compilation_status_success) {
-    TI_WARN("Failed to compile kernel={}, GLSL source:\n{}", kernel_name, glsl);
-    TI_ERROR("Compilation errors:\n{}", spv_result.GetErrorMessage());
+    err_handler_(glsl_src, shader_name, spv_result.GetErrorMessage());
     return std::nullopt;
   }
-  TI_INFO("Succesfully compiled GLSL for kernel={}", kernel_name);
-  SpirvBinary res(spv_result.begin(), spv_result.end());
-  TI_ASSERT(!res.empty());
-  return res;
+  return SpirvBinary(spv_result.begin(), spv_result.end());
 }
 
 }  // namespace vulkan
-TLANG_NAMESPACE_END
+}  // namespace lang
+}  // namespace taichi
