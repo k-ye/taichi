@@ -30,6 +30,7 @@ std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
 GlslToSpirvCompiler::GlslToSpirvCompiler() {
   opts_.SetTargetEnvironment(shaderc_target_env_vulkan,
                              VulkanEnvSettings::kShadercEnvVersion());
+  // opts_.SetOptimizationLevel(shaderc_optimization_level_performance);
 }
 
 std::optional<GlslToSpirvCompiler::SpirvBinary> GlslToSpirvCompiler::compile(

@@ -35,16 +35,14 @@ namespace {
 ///  Vulkan helper API
 /// </summary>
 constexpr VkAllocationCallbacks *kNoVkAllocCallbacks = nullptr;
-#ifdef NDEBUG
 constexpr bool kEnableValidationLayers = true;
-#else
-constexpr bool kEnableValidationLayers = true;
-#endif  // #ifdef NDEBUG
 
 // constexpr std::array<const char *, 1> kValidationLayers = {
 //     "VK_LAYER_KHRONOS_validation",
 // };
-const std::vector<const char *> kValidationLayers = {};
+const std::vector<const char *> kValidationLayers = {
+  "VK_LAYER_KHRONOS_validation",
+};
 
 bool CheckValidationLayerSupport() {
   uint32_t layerCount;
@@ -358,11 +356,9 @@ class UserVulkanKernel {
     CreateDescriptorPool(params);
     CreateDescriptorSets(params);
     CreateCommandBuffer(params);
-    CreateSyncObjects();
   }
 
   ~UserVulkanKernel() {
-    vkDestroyFence(device_, sync_fence_, kNoVkAllocCallbacks);
     vkDestroyDescriptorPool(device_, descriptorPool_, kNoVkAllocCallbacks);
     vkDestroyPipeline(device_, pipeline_, kNoVkAllocCallbacks);
     vkDestroyPipelineLayout(device_, pipelineLayout_, kNoVkAllocCallbacks);
@@ -565,18 +561,27 @@ class UserVulkanKernel {
     vkCmdDispatch(commandBuffer_, group_x,
                   /*groupCountY=*/1,
                   /*groupCountZ=*/1);
-    pfnCmdDebugEnd(commandBuffer_);
+    // Copied from TVM
+    // https://github.com/apache/tvm/blob/b2a3c481ebbb7cfbd5335fb11cd516ae5f348406/src/runtime/vulkan/vulkan.cc#L1134-L1142
+    VkMemoryBarrier barrier_info{};
+    barrier_info.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier_info.pNext = nullptr;
+    barrier_info.srcAccessMask =
+        VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    barrier_info.dstAccessMask =
+        (VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    vkCmdPipelineBarrier(commandBuffer_,
+                         /*srcStageMask=*/VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         /*dstStageMask=*/VK_PIPELINE_STAGE_TRANSFER_BIT |
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         /*srcStageMask=*/0, /*memoryBarrierCount=*/1,
+                         &barrier_info, /*bufferMemoryBarrierCount=*/0,
+                         /*pBufferMemoryBarriers=*/nullptr,
+                         /*imageMemoryBarrierCount=*/0,
+                         /*pImageMemoryBarriers=*/nullptr);
     BAIL_ON_VK_BAD_RESULT(vkEndCommandBuffer(commandBuffer_),
                           "failed to record command buffer");
-  }
-
-  void CreateSyncObjects() {
-    VkFenceCreateInfo fence_info{};
-    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fence_info.flags = 0;
-    BAIL_ON_VK_BAD_RESULT(
-        vkCreateFence(device_, &fence_info, nullptr, &sync_fence_),
-        "failed to create sync fence");
   }
 
   std::string name_;
@@ -588,7 +593,6 @@ class UserVulkanKernel {
   VkDescriptorPool descriptorPool_;
   VkDescriptorSet descriptorSet_;
   VkCommandBuffer commandBuffer_;
-  VkFence sync_fence_;
 };
 
 class HostDeviceContextBlitter {
@@ -773,7 +777,6 @@ class VkRuntime ::Impl {
     PickPhysicalDevice();
     CreateLogicalDevice();
     CreateCommandPool();
-    CreateSyncObjects();
     init_memory_pool(params);
     init_vk_buffers();
   }
@@ -790,7 +793,6 @@ class VkRuntime ::Impl {
       DestroyDebugUtilsMessengerEXT(instance_, debugMessenger_,
                                     kNoVkAllocCallbacks);
     }
-    vkDestroyFence(device_, sync_fence_, kNoVkAllocCallbacks);
     vkDestroyCommandPool(device_, command_pool_, kNoVkAllocCallbacks);
     vkDestroyDevice(device_, kNoVkAllocCallbacks);
     vkDestroyInstance(instance_, kNoVkAllocCallbacks);
@@ -913,7 +915,7 @@ class VkRuntime ::Impl {
   }
 
   void SetupDebugMessenger() {
-    if (!kEnableValidationLayers) {
+    if constexpr (!kEnableValidationLayers) {
       return;
     }
     VkDebugUtilsMessengerCreateInfoEXT createInfo{};
@@ -967,7 +969,7 @@ class VkRuntime ::Impl {
     createInfo.pEnabledFeatures = &deviceFeatures;
     createInfo.enabledExtensionCount = 0;
 
-    if (kEnableValidationLayers) {
+    if constexpr (kEnableValidationLayers) {
       createInfo.enabledLayerCount = (uint32_t)kValidationLayers.size();
       createInfo.ppEnabledLayerNames = kValidationLayers.data();
     } else {
@@ -989,15 +991,6 @@ class VkRuntime ::Impl {
         vkCreateCommandPool(device_, &poolInfo, kNoVkAllocCallbacks,
                             &command_pool_),
         "failed to create command pool");
-  }
-
-  void CreateSyncObjects() {
-    VkFenceCreateInfo fence_info{};
-    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    // fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-    BAIL_ON_VK_BAD_RESULT(
-        vkCreateFence(device_, &fence_info, nullptr, &sync_fence_),
-        "failed to create sync fence");
   }
 
   void init_memory_pool(const Params &params) {
@@ -1042,7 +1035,6 @@ class VkRuntime ::Impl {
   VkDevice device_;
   VkQueue compute_queue_;
   VkCommandPool command_pool_;
-  VkFence sync_fence_;
   GlslToSpirvCompiler spv_compiler_;
 
   std::unique_ptr<LinearVkMemoryPool> memory_pool_;
