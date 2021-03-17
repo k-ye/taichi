@@ -88,7 +88,7 @@ class LinearVkMemoryPool {
   uint32_t compute_queue_family_index_{0};
   VkBufferCreateInfo buffer_creation_template_{};
   VkDeviceSize pool_size_{0};
-  VkDeviceSize next_ = {0};
+  VkDeviceSize next_{0};
 };
 
 }  // namespace vulkan

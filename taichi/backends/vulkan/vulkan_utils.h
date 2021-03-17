@@ -20,7 +20,9 @@ std::vector<VkExtensionProperties> GetDeviceExtensionProperties(
 
 class VulkanEnvSettings {
  public:
-  static constexpr uint32_t kApiVersion() { return VK_API_VERSION_1_2; }
+  static constexpr uint32_t kApiVersion() {
+    return VK_API_VERSION_1_2;
+  }
 
   static constexpr shaderc_env_version kShadercEnvVersion() {
     return shaderc_env_version_vulkan_1_2;
@@ -42,7 +44,7 @@ class GlslToSpirvCompiler {
  private:
   shaderc::CompileOptions opts_;
   shaderc::Compiler compiler_;
-  ErrorHandler err_handler_;
+  ErrorHandler err_handler_{nullptr};
 };
 
 }  // namespace vulkan

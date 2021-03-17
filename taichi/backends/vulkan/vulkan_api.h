@@ -17,17 +17,17 @@ struct SpirvCodeView {
   SpirvCodeView() = default;
 
   explicit SpirvCodeView(const std::vector<uint32_t> &code)
-      : data(code.data()), size(code.size() * sizeof(uint32_t)) {
-  }
+      : data(code.data()), size(code.size() * sizeof(uint32_t)) {}
 };
 
 struct VulkanQueueFamilyIndices {
   std::optional<uint32_t> compute_family;
-  // Do we also need a transfer_family?
+  // TODO: While it is the case that all COMPUTE/GRAPHICS queue also support
+  // TRANSFER by default, it could improve the performance to find a
+  // TRANSFER-dedicated queue family?
+  // https://vulkan-tutorial.com/Vertex_buffers/Staging_buffer#page_Transfer-queue
 
-  bool is_complete() const {
-    return compute_family.has_value();
-  }
+  bool is_complete() const { return compute_family.has_value(); }
 };
 
 // Many classes here are inspired by TVM's runtime
@@ -45,21 +45,13 @@ class VulkanDevice {
   explicit VulkanDevice(const Params &params);
   ~VulkanDevice();
 
-  VkPhysicalDevice physical_device() const {
-    return physical_device_;
-  }
-  VkDevice device() const {
-    return device_;
-  }
+  VkPhysicalDevice physical_device() const { return physical_device_; }
+  VkDevice device() const { return device_; }
   const VulkanQueueFamilyIndices &queue_family_indices() const {
     return queue_family_indices_;
   }
-  VkQueue compute_queue() const {
-    return compute_queue_;
-  }
-  VkCommandPool command_pool() const {
-    return command_pool_;
-  }
+  VkQueue compute_queue() const { return compute_queue_; }
+  VkCommandPool command_pool() const { return command_pool_; }
 
  private:
   void create_instance(const Params &params);
@@ -77,6 +69,7 @@ class VulkanDevice {
   // in Taichi we only use a single queue on a single device (i.e. a single CUDA
   // stream), so it doesn't make a difference.
   VkQueue compute_queue_{VK_NULL_HANDLE};
+  // TODO: Shall we have a separate command pool for COMPUTE and TRANSFER?
   VkCommandPool command_pool_{VK_NULL_HANDLE};
 };
 
@@ -100,15 +93,9 @@ class VulkanPipeline {
   explicit VulkanPipeline(const Params &params);
   ~VulkanPipeline();
 
-  VkPipelineLayout pipeline_layout() const {
-    return pipeline_layout_;
-  }
-  VkPipeline pipeline() const {
-    return pipeline_;
-  }
-  const VkDescriptorSet &descriptor_set() const {
-    return descriptor_set_;
-  }
+  VkPipelineLayout pipeline_layout() const { return pipeline_layout_; }
+  VkPipeline pipeline() const { return pipeline_; }
+  const VkDescriptorSet &descriptor_set() const { return descriptor_set_; }
 
  private:
   void create_descriptor_set_layout(const Params &params);
@@ -116,19 +103,19 @@ class VulkanPipeline {
   void create_descriptor_pool(const Params &params);
   void create_descriptor_sets(const Params &params);
 
-  VkDevice device_;  // not owned
+  VkDevice device_{VK_NULL_HANDLE};  // not owned
 
   // TODO: Commands using the same Taichi buffers should be able to share the
   // same descriptor set layout?
-  VkDescriptorSetLayout descriptor_set_layout_;
+  VkDescriptorSetLayout descriptor_set_layout_{VK_NULL_HANDLE};
   // TODO: Commands having the same |descriptor_set_layout_| should be able to
   // share the same pipeline layout?
-  VkPipelineLayout pipeline_layout_;
+  VkPipelineLayout pipeline_layout_{VK_NULL_HANDLE};
   // This maps 1:1 to a shader, so it needs to be created per compute
   // shader.
-  VkPipeline pipeline_;
-  VkDescriptorPool descriptor_pool_;
-  VkDescriptorSet descriptor_set_;
+  VkPipeline pipeline_{VK_NULL_HANDLE};
+  VkDescriptorPool descriptor_pool_{VK_NULL_HANDLE};
+  VkDescriptorSet descriptor_set_{VK_NULL_HANDLE};
 };
 
 // VulkanCommandBuilder builds a VkCommandBuffer by recording a given series of
@@ -150,6 +137,18 @@ class VulkanCommandBuilder {
   // https://vulkan-tutorial.com/Drawing_a_triangle/Drawing/Command_buffers#page_Command-buffer-allocation
   VkCommandBuffer command_buffer_{VK_NULL_HANDLE};
 };
+
+enum class VulkanCopyBufferDirection {
+  H2D,
+  D2H,
+  // D2D does not have a use case yet
+};
+
+VkCommandBuffer record_copy_buffer_command(const VulkanDevice *device,
+                                           VkBuffer src_buffer,
+                                           VkBuffer dst_buffer,
+                                           VkDeviceSize size,
+                                           VulkanCopyBufferDirection direction);
 
 // A vulkan stream models the asynchronous model of GPU execution queue.
 // Commands are submitted via launch() and executed asynchronously. Sync blocks

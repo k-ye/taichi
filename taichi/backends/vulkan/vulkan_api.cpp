@@ -88,8 +88,7 @@ VkResult create_debug_utils_messenger_ext(
 }
 
 void destroy_debug_utils_messenger_ext(
-    VkInstance instance,
-    VkDebugUtilsMessengerEXT debug_messenger,
+    VkInstance instance, VkDebugUtilsMessengerEXT debug_messenger,
     const VkAllocationCallbacks *p_allocator) {
   auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
       instance, "vkDestroyDebugUtilsMessengerEXT");
@@ -508,8 +507,52 @@ VkCommandBuffer VulkanCommandBuilder::build() {
   return res;
 }
 
-VulkanStream::VulkanStream(const VulkanDevice *device) : device_(device) {
+VkCommandBuffer record_copy_buffer_command(
+    const VulkanDevice *device, VkBuffer src_buffer, VkBuffer dst_buffer,
+    VkDeviceSize size, VulkanCopyBufferDirection direction) {
+  VkCommandBuffer command{VK_NULL_HANDLE};
+  VkCommandBufferAllocateInfo alloc_info{};
+  alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  alloc_info.commandPool = device->command_pool();
+  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc_info.commandBufferCount = 1;
+  BAIL_ON_VK_BAD_RESULT(
+      vkAllocateCommandBuffers(device->device(), &alloc_info, &command),
+      "failed to allocate copy command buffer");
+
+  VkCommandBufferBeginInfo begin_info{};
+  begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin_info.flags = 0;
+  begin_info.pInheritanceInfo = nullptr;
+  BAIL_ON_VK_BAD_RESULT(vkBeginCommandBuffer(command, &begin_info),
+                        "failed to begin recording copy command buffer");
+
+  VkBufferCopy copy_region{};
+  copy_region.srcOffset = 0;
+  copy_region.dstOffset = 0;
+  copy_region.size = size;
+  vkCmdCopyBuffer(command, src_buffer, dst_buffer, /*regionCount=*/1,
+                  &copy_region);
+  if (direction == VulkanCopyBufferDirection::H2D) {
+    VkMemoryBarrier barrier_info;
+    barrier_info.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier_info.pNext = nullptr;
+
+    barrier_info.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier_info.dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(command,
+                         /*srcStageMask=*/VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         /*dstStageMask=*/VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 1, &barrier_info, 0, nullptr, 0, nullptr);
+  }
+  BAIL_ON_VK_BAD_RESULT(vkEndCommandBuffer(command),
+                        "failed to record copy command buffer");
+  return command;
 }
+
+VulkanStream::VulkanStream(const VulkanDevice *device) : device_(device) {}
 
 void VulkanStream::launch(VkCommandBuffer command) {
   VkSubmitInfo submit_info{};
@@ -523,9 +566,7 @@ void VulkanStream::launch(VkCommandBuffer command) {
       "failed to submit command buffer");
 }
 
-void VulkanStream::synchronize() {
-  vkQueueWaitIdle(device_->compute_queue());
-}
+void VulkanStream::synchronize() { vkQueueWaitIdle(device_->compute_queue()); }
 
 }  // namespace vulkan
 }  // namespace lang
