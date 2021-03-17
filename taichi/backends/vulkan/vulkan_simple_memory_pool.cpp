@@ -108,12 +108,12 @@ std::unique_ptr<VkBufferWithMemory> LinearVkMemoryPool::alloc_and_bind(
       vkBindBufferMemory(device_, buffer, memory_, offset_in_mem),
       "failed to bind buffer to memory");
 
-  VkMemoryRequirements memRequirements;
-  vkGetBufferMemoryRequirements(device_, buffer, &memRequirements);
-  TI_ASSERT(memRequirements.memoryTypeBits & (1 << memory_type_index_));
-  TI_ASSERT_INFO((buf_size % memRequirements.alignment) == 0,
+  VkMemoryRequirements mem_requirements;
+  vkGetBufferMemoryRequirements(device_, buffer, &mem_requirements);
+  TI_ASSERT(mem_requirements.memoryTypeBits & (1 << memory_type_index_));
+  TI_ASSERT_INFO((buf_size % mem_requirements.alignment) == 0,
                  "buf_size={} required alignment={}", buf_size,
-                 memRequirements.alignment);
+                 mem_requirements.alignment);
   return std::make_unique<VkBufferWithMemory>(device_, buffer, memory_,
                                               buf_size, offset_in_mem);
 }

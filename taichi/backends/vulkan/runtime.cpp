@@ -252,7 +252,7 @@ class VkRuntime ::Impl {
     }
     global_tmps_buffer_.reset();
     root_buffer_.reset();
-    memory_pool_.reset();
+    dev_local_memory_pool_.reset();
   }
 
   KernelHandle register_taichi_kernel(RegisterParams reg_params) {
@@ -262,7 +262,7 @@ class VkRuntime ::Impl {
     params.device = device_.get();
     params.root_buffer = root_buffer_.get();
     params.global_tmps_buffer = global_tmps_buffer_.get();
-    params.vk_mem_pool = memory_pool_.get();
+    params.vk_mem_pool = staging_memory_pool_.get();
 
     for (int i = 0; i < reg_params.task_glsl_source_codes.size(); ++i) {
       const auto &attribs = reg_params.kernel_attribs.tasks_attribs[i];
@@ -320,28 +320,36 @@ class VkRuntime ::Impl {
     /*mp_params.poolSize =
         (params.config->device_memory_GB * 1024 * 1024 * 1024ULL);*/
     mp_params.pool_size = 10 * 1024 * 1024;
-    mp_params.required_properties = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    mp_params.required_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     mp_params.compute_queue_family_index =
         device_->queue_family_indices().compute_family.value();
 
-    auto &bufTemplate = mp_params.buffer_creation_template;
-    bufTemplate.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufTemplate.pNext = nullptr;
-    bufTemplate.flags = 0;
-    bufTemplate.size = 0;
-    bufTemplate.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    bufTemplate.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    bufTemplate.queueFamilyIndexCount = 1;
-    bufTemplate.pQueueFamilyIndices = nullptr;
+    auto &buf_creation_template = mp_params.buffer_creation_template;
+    buf_creation_template.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buf_creation_template.pNext = nullptr;
+    buf_creation_template.flags = 0;
+    buf_creation_template.size = 0;
+    buf_creation_template.usage =
+        (VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+         VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    buf_creation_template.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    buf_creation_template.queueFamilyIndexCount = 1;
+    buf_creation_template.pQueueFamilyIndices = nullptr;
 
-    memory_pool_ = LinearVkMemoryPool::try_make(mp_params);
-    TI_ASSERT(memory_pool_ != nullptr);
+    dev_local_memory_pool_ = LinearVkMemoryPool::try_make(mp_params);
+    TI_ASSERT(dev_local_memory_pool_ != nullptr);
+
+    mp_params.required_properties = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    buf_creation_template.usage =
+        (VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    staging_memory_pool_ = LinearVkMemoryPool::try_make(mp_params);
+    TI_ASSERT(staging_memory_pool_ != nullptr);
   }
 
   void init_vk_buffers() {
-    root_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
-    global_tmps_buffer_ = memory_pool_->alloc_and_bind(1024 * 1024);
+    root_buffer_ = dev_local_memory_pool_->alloc_and_bind(1024 * 1024);
+    global_tmps_buffer_ = dev_local_memory_pool_->alloc_and_bind(1024 * 1024);
   }
 
   const CompileConfig *const config_;
@@ -352,9 +360,10 @@ class VkRuntime ::Impl {
   std::unique_ptr<VulkanStream> stream_{nullptr};
   GlslToSpirvCompiler spv_compiler_;
 
-  std::unique_ptr<LinearVkMemoryPool> memory_pool_;
+  std::unique_ptr<LinearVkMemoryPool> dev_local_memory_pool_;
   std::unique_ptr<VkBufferWithMemory> root_buffer_;
   std::unique_ptr<VkBufferWithMemory> global_tmps_buffer_;
+  std::unique_ptr<LinearVkMemoryPool> staging_memory_pool_;
 
   std::vector<std::unique_ptr<CompiledTaichiKernel>> ti_kernels_;
   int num_pending_kernels_{0};
