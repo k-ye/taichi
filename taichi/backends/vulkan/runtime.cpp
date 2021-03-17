@@ -170,22 +170,22 @@ class CompiledTaichiKernel {
     const VulkanDevice *device{nullptr};
     VkBufferWithMemory *root_buffer{nullptr};
     VkBufferWithMemory *global_tmps_buffer{nullptr};
-    LinearVkMemoryPool *vk_mem_pool{nullptr};
+    LinearVkMemoryPool *host_visible_mem_pool{nullptr};
   };
 
   CompiledTaichiKernel(const Params &ti_params)
-      : ti_kernel_attribs(*ti_params.ti_kernel_attribs) {
+      : ti_kernel_attribs_(*ti_params.ti_kernel_attribs) {
     InputBuffersMap input_buffers = {
         {BufferEnum::Root, ti_params.root_buffer},
         {BufferEnum::GlobalTmps, ti_params.global_tmps_buffer},
     };
-    if (!ti_kernel_attribs.ctx_attribs.empty()) {
-      ctx_buffer_ = ti_params.vk_mem_pool->alloc_and_bind(
-          ti_kernel_attribs.ctx_attribs.total_bytes());
+    if (!ti_kernel_attribs_.ctx_attribs.empty()) {
+      const auto ctx_sz = ti_kernel_attribs_.ctx_attribs.total_bytes();
+      ctx_buffer_ = ti_params.host_visible_mem_pool->alloc_and_bind(ctx_sz);
       input_buffers[BufferEnum::Context] = ctx_buffer_.get();
     }
 
-    const auto &task_attribs = ti_kernel_attribs.tasks_attribs;
+    const auto &task_attribs = ti_kernel_attribs_.tasks_attribs;
     const auto &spirv_bins = ti_params.spirv_bins;
     TI_ASSERT(task_attribs.size() == spirv_bins.size());
 
@@ -205,18 +205,40 @@ class CompiledTaichiKernel {
       cmd_builder.append(*vp, group_x);
       vk_pipelines_.push_back(std::move(vp));
     }
-    command_buffer = cmd_builder.build();
+    command_buffer_ = cmd_builder.build();
   }
 
-  // Have to be exposed as public for Impl to use. We cannot friend the Impl
-  // class because it is private.
-  TaichiKernelAttributes ti_kernel_attribs;
+  const TaichiKernelAttributes &ti_kernel_attribs() const {
+    return ti_kernel_attribs_;
+  }
+
+  size_t num_vk_pipelines() const {
+    return vk_pipelines_.size();
+  }
+
+  VkBufferWithMemory* ctx_buffer() const {
+    return ctx_buffer_.get();
+  }
+
+  VkCommandBuffer command_buffer() const {
+    return command_buffer_;
+  }
+
+ private:
+  TaichiKernelAttributes ti_kernel_attribs_;
+
+  // Right now |ctx_buffer_| is allocated from a HOST_VISIBLE|COHERENT
+  // memory, because we do not do computation on this buffer anyway, and it may
+  // not worth the effort doing another hop via a staging buffer.
+  // TODO: Provide an option to use staging buffer. This could be useful if the
+  // kernel does lots of IO on the context buffer, e.g., copy a large np array.
   std::unique_ptr<VkBufferWithMemory> ctx_buffer_{nullptr};
   std::vector<std::unique_ptr<VulkanPipeline>> vk_pipelines_;
+
   // VkCommandBuffers are destroyed when the underlying command pool is
   // destroyed.
   // https://vulkan-tutorial.com/Drawing_a_triangle/Drawing/Command_buffers#page_Command-buffer-allocation
-  VkCommandBuffer command_buffer{VK_NULL_HANDLE};
+  VkCommandBuffer command_buffer_{VK_NULL_HANDLE};
 };
 
 }  // namespace
@@ -262,7 +284,7 @@ class VkRuntime ::Impl {
     params.device = device_.get();
     params.root_buffer = root_buffer_.get();
     params.global_tmps_buffer = global_tmps_buffer_.get();
-    params.vk_mem_pool = staging_memory_pool_.get();
+    params.host_visible_mem_pool = host_visible_memory_pool_.get();
 
     for (int i = 0; i < reg_params.task_glsl_source_codes.size(); ++i) {
       const auto &attribs = reg_params.kernel_attribs.tasks_attribs[i];
@@ -284,15 +306,15 @@ class VkRuntime ::Impl {
   void launch_kernel(KernelHandle handle, Context *host_ctx) {
     auto *ti_kernel = ti_kernels_[handle.id_].get();
     auto ctx_blitter = HostDeviceContextBlitter::maybe_make(
-        &ti_kernel->ti_kernel_attribs.ctx_attribs, host_ctx,
-        host_result_buffer_, ti_kernel->ctx_buffer_.get());
+        &ti_kernel->ti_kernel_attribs().ctx_attribs, host_ctx,
+        host_result_buffer_, ti_kernel->ctx_buffer());
     if (ctx_blitter) {
-      TI_ASSERT(ti_kernel->ctx_buffer_ != nullptr);
+      TI_ASSERT(ti_kernel->ctx_buffer() != nullptr);
       ctx_blitter->host_to_device();
     }
 
-    stream_->launch(ti_kernel->command_buffer);
-    num_pending_kernels_ += ti_kernel->vk_pipelines_.size();
+    stream_->launch(ti_kernel->command_buffer());
+    num_pending_kernels_ += ti_kernel->num_vk_pipelines();
     if (ctx_blitter) {
       synchronize();
       ctx_blitter->device_to_host();
@@ -317,9 +339,8 @@ class VkRuntime ::Impl {
     LinearVkMemoryPool::Params mp_params;
     mp_params.physical_device = device_->physical_device();
     mp_params.device = device_->device();
-    /*mp_params.poolSize =
-        (params.config->device_memory_GB * 1024 * 1024 * 1024ULL);*/
-    mp_params.pool_size = 10 * 1024 * 1024;
+#pragma message("Vulkan memory pool size hardcoded to 64MB")
+    mp_params.pool_size = 64 * 1024 * 1024;
     mp_params.required_properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     mp_params.compute_queue_family_index =
         device_->queue_family_indices().compute_family.value();
@@ -340,15 +361,17 @@ class VkRuntime ::Impl {
     TI_ASSERT(dev_local_memory_pool_ != nullptr);
 
     mp_params.required_properties = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                                     VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                     VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
     buf_creation_template.usage =
         (VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    staging_memory_pool_ = LinearVkMemoryPool::try_make(mp_params);
-    TI_ASSERT(staging_memory_pool_ != nullptr);
+    host_visible_memory_pool_ = LinearVkMemoryPool::try_make(mp_params);
+    TI_ASSERT(host_visible_memory_pool_ != nullptr);
   }
 
   void init_vk_buffers() {
-    root_buffer_ = dev_local_memory_pool_->alloc_and_bind(1024 * 1024);
+#pragma message("Vulkan buffers size hardcoded")
+    root_buffer_ = dev_local_memory_pool_->alloc_and_bind(16 * 1024 * 1024);
     global_tmps_buffer_ = dev_local_memory_pool_->alloc_and_bind(1024 * 1024);
   }
 
@@ -363,7 +386,7 @@ class VkRuntime ::Impl {
   std::unique_ptr<LinearVkMemoryPool> dev_local_memory_pool_;
   std::unique_ptr<VkBufferWithMemory> root_buffer_;
   std::unique_ptr<VkBufferWithMemory> global_tmps_buffer_;
-  std::unique_ptr<LinearVkMemoryPool> staging_memory_pool_;
+  std::unique_ptr<LinearVkMemoryPool> host_visible_memory_pool_;
 
   std::vector<std::unique_ptr<CompiledTaichiKernel>> ti_kernels_;
   int num_pending_kernels_{0};

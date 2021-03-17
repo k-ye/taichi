@@ -566,7 +566,13 @@ void VulkanStream::launch(VkCommandBuffer command) {
       "failed to submit command buffer");
 }
 
-void VulkanStream::synchronize() { vkQueueWaitIdle(device_->compute_queue()); }
+void VulkanStream::synchronize() {
+  // While vkQueueWaitIdle is strongly discouraged, this is probably the most
+  // viable way for synchronization in Taichi. Unlike graphics pipeline, there
+  // is no clear boundary (i.e. frame) for us to use a VkFence. TVM accumulates
+  // all the commands into a single buffer, then submits it all at once upon
+  // synchronization. Not sure how efficient that model is.
+  vkQueueWaitIdle(device_->compute_queue()); }
 
 }  // namespace vulkan
 }  // namespace lang

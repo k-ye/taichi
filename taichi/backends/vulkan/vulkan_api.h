@@ -23,8 +23,8 @@ struct SpirvCodeView {
 struct VulkanQueueFamilyIndices {
   std::optional<uint32_t> compute_family;
   // TODO: While it is the case that all COMPUTE/GRAPHICS queue also support
-  // TRANSFER by default, it could improve the performance to find a
-  // TRANSFER-dedicated queue family?
+  // TRANSFER by default, maye there are some performance benefits to find a
+  // TRANSFER-dedicated queue family.
   // https://vulkan-tutorial.com/Vertex_buffers/Staging_buffer#page_Transfer-queue
 
   bool is_complete() const { return compute_family.has_value(); }
@@ -69,13 +69,14 @@ class VulkanDevice {
   // in Taichi we only use a single queue on a single device (i.e. a single CUDA
   // stream), so it doesn't make a difference.
   VkQueue compute_queue_{VK_NULL_HANDLE};
-  // TODO: Shall we have a separate command pool for COMPUTE and TRANSFER?
+  // TODO: Shall we have dedicated command pools for COMPUTE and TRANSFER
+  // commands, respectively?
   VkCommandPool command_pool_{VK_NULL_HANDLE};
 };
 
 // VulkanPipeline maps to a VkPipeline, or a SPIR-V module (a GLSL compute
 // shader). Because Taichi's buffers are all pre-allocated upon startup, we
-// only need to set up the descriptor set (bind the buffers via
+// only need to set up the descriptor set (i.e., bind the buffers via
 // VkWriteDescriptorSet) once during the pipeline initialization.
 class VulkanPipeline {
  public:
@@ -150,9 +151,10 @@ VkCommandBuffer record_copy_buffer_command(const VulkanDevice *device,
                                            VkDeviceSize size,
                                            VulkanCopyBufferDirection direction);
 
-// A vulkan stream models the asynchronous model of GPU execution queue.
-// Commands are submitted via launch() and executed asynchronously. Sync blocks
-// the host until all the commands have completed execution.
+// A vulkan stream models an asynchronous GPU execution queue.
+// Commands are submitted via launch() and executed asynchronously.
+// synchronize()s blocks the host, until all the launched commands have
+// completed execution.
 class VulkanStream {
  public:
   VulkanStream(const VulkanDevice *device);
