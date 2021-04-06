@@ -212,7 +212,7 @@ if (TI_WITH_VULKAN)
             "to download the matching libraries.")
     endif()
     find_library(SHADERC_LIB NAMES "shaderc_combined" PATHS "${SHADERC_ROOT_DIR}/lib" REQUIRED)
-    target_include_directories(${CORE_LIBRARY_NAME} PRIVATE "${SHADERC_ROOT_DIR}/include")
+    target_include_directories(${CORE_LIBRARY_NAME} PUBLIC "${SHADERC_ROOT_DIR}/include")
     target_link_libraries(${CORE_LIBRARY_NAME} ${SHADERC_LIB})
     if (LINUX)
         # shaderc requires pthread
