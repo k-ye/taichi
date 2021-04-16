@@ -248,7 +248,7 @@ class StructCompiler {
         emit("    return rep_.length();");
         emit("  }}\n");
       }
-      emit(" private:");
+      // emit(" private:");
       emit("  SNodeRep_{} rep_;", snty_name);
       emit("}};");
     } else {

@@ -37,12 +37,15 @@ STR(
     kernel void element_listgen(device byte *runtime_addr [[buffer(0)]],
                                 device byte *root_addr [[buffer(1)]],
                                 device int *args [[buffer(2)]],
+                                device byte *print_assert_addr [[buffer(3)]],
                                 const uint utid_ [[thread_position_in_grid]],
                                 const uint grid_size [[threads_per_grid]]) {
       device Runtime *runtime =
           reinterpret_cast<device Runtime *>(runtime_addr);
       device MemoryAllocator *mem_alloc =
           reinterpret_cast<device MemoryAllocator *>(runtime + 1);
+      device auto *print_alloc_ =
+      reinterpret_cast<device PrintMsgAllocator *>(print_assert_addr + 300);
 
       const int parent_snode_id = args[0];
       const int child_snode_id = args[1];

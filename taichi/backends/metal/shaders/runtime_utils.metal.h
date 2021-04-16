@@ -381,11 +381,15 @@ STR(
         return ElemIndex(v);
       }
 
+      inline ElemIndex to_nodemgr_idx(int ch_i) {
+        return to_nodemgr_idx(addr_, ch_i);
+      }
+
       static bool is_active(device byte * addr, int ch_i) {
         return to_nodemgr_idx(addr, ch_i).is_valid();
       }
 
-     private:
+    //  private:
       device byte *addr_;
       NodeManager nm_;
       // Index of the ambient child element in |nm_|.

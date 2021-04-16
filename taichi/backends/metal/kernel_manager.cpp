@@ -592,7 +592,7 @@ class KernelManager::Impl {
     TI_ASSERT(global_tmps_buffer_ != nullptr);
 
     TI_ASSERT(compiled_structs_.runtime_size > 0);
-    const int mem_pool_bytes = (config_->device_memory_GB * 1024 * 1024 * 1024);
+    const int mem_pool_bytes = (100 * 1024 * 1024);
     runtime_mem_ = std::make_unique<BufferMemoryView>(
         compiled_structs_.runtime_size + mem_pool_bytes, mem_pool_);
     runtime_buffer_ = new_mtl_buffer_no_copy(device_.get(), runtime_mem_->ptr(),
@@ -677,7 +677,8 @@ class KernelManager::Impl {
     }
 
     const auto &used = ctk.ti_kernel_attribs.used_features;
-    const bool used_print_assert = (used.print || used.assertion);
+    // const bool used_print_assert = (used.print || used.assertion);
+    const bool used_print_assert = true;
     if (ctx_blitter || used_print_assert) {
       // TODO(k-ye): One optimization is to synchronize only when we absolutely
       // need to transfer the data back to host. This includes the cases where
@@ -690,6 +691,7 @@ class KernelManager::Impl {
         clear_print_assert_buffer();
         buffers_to_blit.push_back(print_buffer_.get());
       }
+      buffers_to_blit.push_back(runtime_buffer_.get());
       blit_buffers_and_sync(buffers_to_blit);
 
       if (ctx_blitter) {
@@ -701,6 +703,7 @@ class KernelManager::Impl {
       if (used.print) {
         flush_print_buffers();
       }
+      TI_INFO("Mem alloc next={}", dev_mem_alloc_mirror_->next);
     }
   }
 
@@ -716,8 +719,59 @@ class KernelManager::Impl {
   std::size_t get_snode_num_dynamically_allocated(SNode *snode) {
     // TODO(k-ye): Have a generic way for querying these sparse runtime stats.
     mac::ScopedAutoreleasePool pool;
-    blit_buffers_and_sync({runtime_buffer_.get()});
+    blit_buffers_and_sync({runtime_buffer_.get(), root_buffer_.get()});
     auto *sna = dev_runtime_mirror_.snode_allocators + snode->id;
+    TI_INFO("Mem alloc next={}", dev_mem_alloc_mirror_->next);
+    const auto snid = snode->id;
+    for (int i = 0; i < 1024; ++i) {
+      auto c = sna->data_list.chunks[i];
+      if (c) {
+        TI_INFO("SNode={} chunk[{}]={}", snid, i, c);
+      }
+    }
+    auto *rtmem = (int32_t *)root_mem_->ptr();
+    std::vector<int> idxs;
+    for (int i = 0; i < 4096; ++i) {
+      // TI_INFO("pointer root mem[{}]={}", i, rtmem[i]);
+      if (rtmem[i] != 0) {
+        idxs.push_back(rtmem[i]);
+      }
+    }
+    std::sort(idxs.begin(), idxs.end());
+    shaders::NodeManager nm;
+    nm.nm_data = sna;
+    nm.mem_alloc = dev_mem_alloc_mirror_;
+    for (int i = 0; i < idxs.size(); ++i) {
+      // auto ei = shaders::NodeManager::ElemIndex(idxs[i]);
+      // TI_ASSERT_INFO(ei.index() == i + 1, "i={} elem_idx={}", i, ei.index());
+      // TI_INFO("elem_idx={} data={}", ei.index(),
+      //         *reinterpret_cast<float *>(nm.get(ei)));
+    }
+
+    auto *lmd = dev_runtime_mirror_.snode_lists + snid + 1;
+    shaders::ListManager lm;
+    lm.lm_data = lmd;
+    lm.mem_alloc = dev_mem_alloc_mirror_;
+    TI_INFO("SNode={} active={}", (snid + 1), lm.num_active());
+
+    lmd = dev_runtime_mirror_.snode_lists;
+    lm.lm_data = lmd;
+    // auto lgen = lm.get<shaders::ListgenElement>(0);
+    auto *lgen_ptr = lm.get_ptr(0);
+    auto lgen = *reinterpret_cast<shaders::ListgenElement *>(lgen_ptr);
+    auto offs = lgen.mem_offset;
+    char *data_begin = reinterpret_cast<char *>(lm.mem_alloc);
+    for (int i = 0; i < 8; ++i) {
+      TI_INFO("root snode list coords[{}]={}", i, lgen.coords.at[i]);
+    }
+    TI_INFO("root snode list mem_offset={}", lgen.mem_offset);
+    TI_INFO("root snode list belonged_nodemgr.id={}", lgen.belonged_nodemgr.id);
+    TI_INFO("root snode list belonged_nodemgr.elem_idx.value={}",
+            lgen.belonged_nodemgr.elem_idx.value());
+    TI_INFO(
+        "Root SNode, chunk[0]={} (lgen_ptr - mem_alloc)={} mem_offset={} (as "
+        "f32={})",
+        lmd->chunks[0], (lgen_ptr - data_begin), offs, *(float *)(&offs));
     // WHY -1?
     //
     // We allocate one ambient element for each `pointer` SNode from its
@@ -811,6 +865,7 @@ class KernelManager::Impl {
       }
       const SNodeDescriptor &sn_desc = iter->second;
       ListManagerData *rtm_list = reinterpret_cast<ListManagerData *>(addr) + i;
+      // constexpr int iii = sizeof(ListgenElement);
       rtm_list->element_stride = sizeof(ListgenElement);
 
       const int num_elems_per_chunk = compute_num_elems_per_chunk(
@@ -901,16 +956,27 @@ class KernelManager::Impl {
       dev_mem_alloc_mirror_ = mem_alloc;
       // Make sure the retured memory address is always greater than 1.
       mem_alloc->next = shaders::MemoryAllocator::kInitOffset;
+      TI_INFO("INIT: start, Mem alloc next={}", dev_mem_alloc_mirror_->next);
+
       // root list data are static
       ListgenElement root_elem;
       root_elem.mem_offset = 0;
       for (int i = 0; i < taichi_max_num_indices; ++i) {
         root_elem.coords.at[i] = 0;
       }
+      root_elem.belonged_nodemgr.id = -1;
       ListManager root_lm;
       root_lm.lm_data = rtm_list_begin + root_id;
       root_lm.mem_alloc = mem_alloc;
       root_lm.append(root_elem);
+
+      auto *lgen_ptr = root_lm.get_ptr(0);
+      auto lgen = *reinterpret_cast<shaders::ListgenElement *>(lgen_ptr);
+      TI_INFO("Root SNode, chunk[0]={} (lgen_ptr - mem_alloc)={} mem_offset={}",
+              root_lm.lm_data->chunks[0],
+              (lgen_ptr - (char *)root_lm.mem_alloc), lgen.mem_offset);
+      TI_INFO("INIT: before allocate ambients, Mem alloc next={}",
+              dev_mem_alloc_mirror_->next);
       // initialize all the ambient elements
       for (const auto &p : snode_id_to_nodemgrs) {
         NodeManager nm;
@@ -922,6 +988,14 @@ class KernelManager::Impl {
 
     did_modify_range(runtime_buffer_.get(), /*location=*/0,
                      runtime_mem_->size());
+
+    print_strtable_.put("child_idx=");
+    print_strtable_.put(" in_root_buffer=");
+    print_strtable_.put(" mem_offset=");
+    print_strtable_.put(" active_=");
+    print_strtable_.put("\n");
+
+    TI_INFO("INIT: done: Mem alloc next={}", dev_mem_alloc_mirror_->next);
   }
 
   void clear_print_assert_buffer() {

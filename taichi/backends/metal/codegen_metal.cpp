@@ -198,6 +198,25 @@ class KernelCodegen : public IRVisitor {
       emit(R"(device {}* {} = {}.val;)",
            metal_data_type_name(stmt->output_snode->dt), stmt->raw_name(),
            get_call);
+      // const std::string debug_name = stmt->raw_name() + "_diff";
+      // emit("const int {} = (int)((device char*){} - (device char*){});",
+      //      debug_name, stmt->raw_name(), kMemAllocVarName);
+      // const auto msgbuf_name = stmt->raw_name() + "_msgbuf_";
+      // const int num_entries = 3;
+      // emit("device auto *{} = mtl_print_alloc_buf({}, {});", msgbuf_name,
+      //      kPrintAllocVarName, num_entries);
+      // emit("if ({}) {{", msgbuf_name);
+      // const std::string msg_var_name = stmt->raw_name() + "_msg_";
+      // emit("PrintMsg {}({}, {});", msg_var_name, msgbuf_name, num_entries);
+
+      // int str_id = print_strtab_->put("diff=");
+      // emit("{}.pm_set_str({}, {});", msg_var_name, 0, str_id);
+      // emit("{}.pm_set_i32({}, {});", msg_var_name, 1, debug_name);
+      // str_id = print_strtab_->put("\n");
+      // emit("{}.pm_set_str({}, {});", msg_var_name, 2, str_id);
+
+      // emit("}}");
+      used_features()->print = true;
     } else {
       emit(R"({} {} = {};)", stmt->output_snode->node_type_name,
            stmt->raw_name(), get_call);
@@ -279,7 +298,52 @@ class KernelCodegen : public IRVisitor {
 
   void visit(GlobalStoreStmt *stmt) override {
     TI_ASSERT(stmt->width() == 1);
+
+    // const std::string data_ptr_name = fmt::format("{}_ptr", kMemAllocVarName);
+    // emit("device char *{} = reinterpret_cast<device char *>({} + 1);",
+    //      data_ptr_name, kMemAllocVarName);
+    // const std::string diff_name = stmt->raw_name() + "_diff";
+    // emit("const int {} = (int)((device char *)tmp40.addr() - {});", diff_name,
+    //      data_ptr_name);
+
     emit(R"(*{} = {};)", stmt->ptr->raw_name(), stmt->data->raw_name());
+
+    // emit("if (({} < 32)) {{", diff_name);
+
+    // const auto msgbuf_name = stmt->raw_name() + "_msgbuf_";
+    // const int num_entries = 9;
+    // emit("device auto *{} = mtl_print_alloc_buf({}, {});", msgbuf_name,
+    //      kPrintAllocVarName, num_entries);
+    // emit("if ({}) {{", msgbuf_name);
+
+    // const std::string msg_var_name = stmt->raw_name() + "_msg_";
+    // emit("PrintMsg {}({}, {});", msg_var_name, msgbuf_name, num_entries);
+
+    // int str_id = -1;
+    // str_id = print_strtab_->put("loop_index=");
+    // emit("{}.pm_set_str({}, {});", msg_var_name, 0, str_id);
+    // emit("{}.pm_set_i32({}, {});", msg_var_name, 1, kLinearLoopIndexName);
+    // str_id = print_strtab_->put("  diff=");
+    // emit("{}.pm_set_str({}, {});", msg_var_name, 2, str_id);
+    // emit("{}.pm_set_i32({}, {});", msg_var_name, 3, diff_name);
+    // str_id = print_strtab_->put("  s1_activate_index(tmp39)=");
+    // const std::string activate_idx = "tmp39";
+    // emit("{}.pm_set_str({}, {});", msg_var_name, 4, str_id);
+    // emit("{}.pm_set_i32({}, {});", msg_var_name, 5, activate_idx);
+
+    // const std::string rep_name = "tmp30.rep_";
+    // const std::string ei_name = stmt->raw_name() + "_elem_idx_";
+    // emit("auto {} = {}.to_nodemgr_idx({});", ei_name, rep_name, activate_idx);
+    // str_id = print_strtab_->put("  node_idx_val=");
+    // emit("{}.pm_set_str({}, {});", msg_var_name, 6, str_id);
+    // emit("{}.pm_set_i32({}, {}.value());", msg_var_name, 7, ei_name);
+
+    // str_id = print_strtab_->put("\n");
+    // emit("{}.pm_set_str({}, {});", msg_var_name, 8, str_id);
+
+    // emit("}}");  // if msgbuf
+
+    // emit("}}");  // if bef/aft
   }
 
   void visit(GlobalLoadStmt *stmt) override {
@@ -807,6 +871,7 @@ class KernelCodegen : public IRVisitor {
   void generate_kernels() {
     SectionGuard sg(this, Section::Kernels);
     IRNode *ast = offloaded_ ? offloaded_ : kernel_->ir.get();
+    // irpass::re_id(ast);
     ast->accept(this);
 
     if (used_features()->sparse) {
@@ -1078,8 +1143,8 @@ class KernelCodegen : public IRVisitor {
         std::min(total_num_self_from_root(sn_descs, sn->id),
                  kMaxNumThreadsGridStrideLoop);
     ka.advisory_num_threads_per_group = stmt->block_dim;
-    ka.buffers = {BuffersEnum::Runtime, BuffersEnum::Root,
-                  BuffersEnum::Context};
+    ka.buffers = {BuffersEnum::Runtime, BuffersEnum::Root, BuffersEnum::Context,
+                  BuffersEnum::Print};
 
     ka.runtime_list_op_attribs = KernelAttributes::RuntimeListOpAttributes();
     ka.runtime_list_op_attribs->snode = sn;

@@ -176,7 +176,7 @@ STR(
     // | ... ...                | |
     // |                        | |
     // +------------------------+ /
-    constant constexpr int kMetalPrintAssertBufferSize = 2 * 1024 * 1024;
+    constant constexpr int kMetalPrintAssertBufferSize = 10 * 1024 * 1024;
     // Space to hold the PrintMsgs. These PrintMsgs are pushed into a queue.
     constant constexpr int kMetalPrintMsgsMaxQueueSize =
         kMetalPrintAssertBufferSize - sizeof(PrintMsgAllocator) -
