@@ -119,12 +119,7 @@ endif()
 set(LIBRARY_NAME ${CORE_LIBRARY_NAME})
 
 if (TI_WITH_OPENGL)
-  set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
-  message("Building with GLFW")
-  add_subdirectory(external/glfw)
+  find_package(glfw3 3.3 REQUIRED)
   target_link_libraries(${LIBRARY_NAME} glfw)
 endif()
 
