@@ -86,10 +86,6 @@ void StructCompiler::infer_snode_properties(SNode &snode) {
       "your requested shape is too large.",
       snode.id, snode.total_num_bits, kMaxTotalNumBits);
 
-  if (snode.has_null()) {
-    ambient_snodes.push_back(&snode);
-  }
-
   if (snode.ch.empty()) {
     if (snode.type != SNodeType::place && snode.type != SNodeType::root) {
       TI_ERROR("{} node must have at least one child.",

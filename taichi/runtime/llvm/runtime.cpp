@@ -891,7 +891,6 @@ void runtime_initialize(
 
 void runtime_initialize2(LLVMRuntime *runtime, int root_id, int num_snodes) {
   // runtime->request_allocate_aligned ready to use
-
   // initialize the root node element list
   for (int i = 0; i < num_snodes; i++) {
     // TODO: some SNodes do not actually need an element list.

@@ -25,6 +25,7 @@
 #include "taichi/program/context.h"
 #include "taichi/runtime/runtime.h"
 #include "taichi/backends/metal/struct_metal.h"
+#include "taichi/struct/visited_snodes_cache.h"
 #include "taichi/system/memory_pool.h"
 #include "taichi/system/threading.h"
 #include "taichi/system/unified_allocator.h"
@@ -101,7 +102,7 @@ class Program {
       nullptr};  // TODO: move this to memory allocator
   std::unordered_map<int, SNode *> snodes;
 
-  std::unique_ptr<Runtime> runtime{nullptr};
+  std::unique_ptr<Runtime> runtime_info{nullptr};
   std::unique_ptr<AsyncEngine> async_engine{nullptr};
 
   std::vector<std::unique_ptr<Kernel>> kernels;
@@ -158,6 +159,8 @@ class Program {
     func();
     materialize_layout();
   }
+
+  void materialize_pending_snodes();
 
   void visualize_layout(const std::string &fn);
 
@@ -307,13 +310,14 @@ class Program {
   void materialize_snode_expr_attributes();
   // Metal related data structures
   std::optional<metal::CompiledStructs> metal_compiled_structs_;
-  std::unique_ptr<metal::KernelManager> metal_kernel_mgr_;
+  std::unique_ptr<metal::KernelManager> metal_kernel_mgr_{nullptr};
   // OpenGL related data structures
   std::optional<opengl::StructCompiledResult> opengl_struct_compiled_;
-  std::unique_ptr<opengl::GLSLLauncher> opengl_kernel_launcher_;
+  std::unique_ptr<opengl::GLSLLauncher> opengl_kernel_launcher_{nullptr};
   // SNode information that requires using Program.
   SNodeGlobalVarExprMap snode_to_glb_var_exprs_;
   SNodeRwAccessorsBank snode_rw_accessors_bank_;
+  VisitedSNodesCache visited_snodes_cache_;
 
  public:
 #ifdef TI_WITH_CC

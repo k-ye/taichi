@@ -216,11 +216,12 @@ void export_lang(py::module &m) {
            })
       .def("print_memory_profiler_info", &Program::print_memory_profiler_info)
       .def("finalize", &Program::finalize)
-      .def("get_root",
-           [&](Program *program) -> SNode * {
-             return program->snode_root.get();
-           },
-           py::return_value_policy::reference)
+      .def(
+          "get_root",
+          [&](Program *program) -> SNode * {
+            return program->snode_root.get();
+          },
+          py::return_value_policy::reference)
       .def("get_total_compilation_time", &Program::get_total_compilation_time)
       .def("print_snode_tree", &Program::print_snode_tree)
       .def("get_snode_num_dynamically_allocated",
@@ -231,7 +232,8 @@ void export_lang(py::module &m) {
            })
       .def("synchronize", &Program::synchronize)
       .def("async_flush", &Program::async_flush)
-      .def("make_aot_module_builder", &Program::make_aot_module_builder);
+      .def("make_aot_module_builder", &Program::make_aot_module_builder)
+      .def("materialize_pending_snodes", &Program::materialize_pending_snodes);
 
   py::class_<AotModuleBuilder>(m, "AotModuleBuilder")
       .def("add", &AotModuleBuilder::add)

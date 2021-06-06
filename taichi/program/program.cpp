@@ -16,6 +16,7 @@
 #include "taichi/backends/cpu/codegen_cpu.h"
 #include "taichi/struct/struct.h"
 #include "taichi/struct/struct_llvm.h"
+#include "taichi/struct/snode_props_inferrer.h"
 #include "taichi/backends/metal/aot_module_builder_impl.h"
 #include "taichi/backends/metal/struct_metal.h"
 #include "taichi/backends/opengl/struct_opengl.h"
@@ -86,14 +87,14 @@ Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
 
   auto arch = desired_arch;
   if (arch == Arch::cuda) {
-    runtime = Runtime::create(arch);
-    if (!runtime) {
+    runtime_info = Runtime::create(arch);
+    if (!runtime_info) {
       TI_WARN("Taichi is not compiled with CUDA.");
       arch = host_arch();
     } else if (!is_cuda_api_available()) {
       TI_WARN("No CUDA driver API detected.");
       arch = host_arch();
-    } else if (!runtime->detected()) {
+    } else if (!runtime_info->detected()) {
       TI_WARN("No CUDA device detected.");
       arch = host_arch();
     } else {
@@ -147,8 +148,8 @@ Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
 
   preallocated_device_buffer = nullptr;
 
-  if (config.kernel_profiler && runtime) {
-    runtime->set_profiler(profiler.get());
+  if (config.kernel_profiler && runtime_info) {
+    runtime_info->set_profiler(profiler.get());
   }
 #if defined(TI_WITH_CUDA)
   if (config.arch == Arch::cuda) {
@@ -284,7 +285,7 @@ void Program::initialize_runtime_system(StructCompiler *scomp) {
 #if defined(TI_WITH_CUDA)
     CUDADriver::get_instance().malloc(
         (void **)&result_buffer, sizeof(uint64) * taichi_result_buffer_entries);
-    auto total_mem = runtime->get_total_memory();
+    auto total_mem = runtime_info->get_total_memory();
     if (config.device_memory_fraction == 0) {
       TI_ASSERT(config.device_memory_GB > 0);
       prealloc_size = std::size_t(config.device_memory_GB * (1UL << 30));
@@ -308,7 +309,7 @@ void Program::initialize_runtime_system(StructCompiler *scomp) {
     result_buffer = allocate_result_buffer_default(this);
     tlctx = llvm_context_host.get();
   }
-  auto runtime = tlctx->runtime_jit_module;
+  auto *jit_runtime = tlctx->runtime_jit_module;
 
   // By the time this creator is called, "this" is already destroyed.
   // Therefore it is necessary to capture members by values.
@@ -335,12 +336,14 @@ void Program::initialize_runtime_system(StructCompiler *scomp) {
     num_rand_states = config.cpu_max_num_threads;
   }
 
-  TI_TRACE("Allocating data structure of size {} B", scomp->root_size);
+  // const std::size_t root_buffer_size = scomp->root_size;
+  const std::size_t root_buffer_size = 128 * 1024 * 1024;
+  TI_TRACE("Allocating data structure of size {} B", root_buffer_size);
   TI_TRACE("Allocating {} random states (used by CUDA only)", num_rand_states);
 
-  runtime->call<void *, void *, std::size_t, std::size_t, void *, int, int,
-                void *, void *, void *>(
-      "runtime_initialize", result_buffer, this, (std::size_t)scomp->root_size,
+  jit_runtime->call<void *, void *, std::size_t, std::size_t, void *, int, int,
+                    void *, void *, void *>(
+      "runtime_initialize", result_buffer, this, root_buffer_size,
       prealloc_size, preallocated_device_buffer, starting_rand_state,
       num_rand_states, (void *)&taichi_allocate_aligned, (void *)std::printf,
       (void *)std::vsnprintf);
@@ -350,14 +353,14 @@ void Program::initialize_runtime_system(StructCompiler *scomp) {
   TI_TRACE("LLVMRuntime pointer fetched");
 
   if (arch_use_host_memory(config.arch) || config.use_unified_memory) {
-    runtime->call<void *>("runtime_get_mem_req_queue", llvm_runtime);
+    jit_runtime->call<void *>("runtime_get_mem_req_queue", llvm_runtime);
     auto mem_req_queue =
         fetch_result<void *>(taichi_result_buffer_ret_value_id);
     memory_pool->set_queue((MemRequestQueue *)mem_req_queue);
   }
 
-  runtime->call<void *, int, int>("runtime_initialize2", llvm_runtime, root_id,
-                                  (int)snodes.size());
+  jit_runtime->call<void *, int, int>("runtime_initialize2", llvm_runtime,
+                                      root_id, (int)snodes.size());
 
   for (int i = 0; i < (int)snodes.size(); i++) {
     if (is_gc_able(snodes[i]->type)) {
@@ -373,36 +376,59 @@ void Program::initialize_runtime_system(StructCompiler *scomp) {
       TI_TRACE("Initializing allocator for snode {} (node size {})",
                snodes[i]->id, node_size);
       auto rt = llvm_runtime;
-      runtime->call<void *, int, std::size_t>(
+      jit_runtime->call<void *, int, std::size_t>(
           "runtime_NodeAllocator_initialize", rt, snodes[i]->id, node_size);
       TI_TRACE("Allocating ambient element for snode {} (node size {})",
                snodes[i]->id, node_size);
-      runtime->call<void *, int>("runtime_allocate_ambient", rt, i, node_size);
+      jit_runtime->call<void *, int>("runtime_allocate_ambient", rt, i,
+                                     node_size);
     }
   }
 
-  if (arch_use_host_memory(config.arch)) {
-    runtime->call<void *, void *, void *>("LLVMRuntime_initialize_thread_pool",
-                                          llvm_runtime, thread_pool.get(),
-                                          (void *)ThreadPool::static_run);
-
-    runtime->call<void *, void *>("LLVMRuntime_set_assert_failed", llvm_runtime,
-                                  (void *)assert_failed_host);
-  }
   if (arch_is_cpu(config.arch)) {
+    jit_runtime->call<void *, void *, void *>(
+        "LLVMRuntime_initialize_thread_pool", llvm_runtime, thread_pool.get(),
+        (void *)ThreadPool::static_run);
+
+    jit_runtime->call<void *, void *>("LLVMRuntime_set_assert_failed",
+                                      llvm_runtime, (void *)assert_failed_host);
+
     // Profiler functions can only be called on CPU kernels
-    runtime->call<void *, void *>("LLVMRuntime_set_profiler", llvm_runtime,
-                                  profiler.get());
-    runtime->call<void *, void *>("LLVMRuntime_set_profiler_start",
-                                  llvm_runtime,
-                                  (void *)&KernelProfilerBase::profiler_start);
-    runtime->call<void *, void *>("LLVMRuntime_set_profiler_stop", llvm_runtime,
-                                  (void *)&KernelProfilerBase::profiler_stop);
+    jit_runtime->call<void *, void *>("LLVMRuntime_set_profiler", llvm_runtime,
+                                      profiler.get());
+    jit_runtime->call<void *, void *>(
+        "LLVMRuntime_set_profiler_start", llvm_runtime,
+        (void *)&KernelProfilerBase::profiler_start);
+    jit_runtime->call<void *, void *>(
+        "LLVMRuntime_set_profiler_stop", llvm_runtime,
+        (void *)&KernelProfilerBase::profiler_stop);
+  }
+}
+
+void Program::materialize_pending_snodes() {
+  SNodePropertiesInferrer snode_props_inferrer{&visited_snodes_cache_};
+  snode_props_inferrer.infer(snode_root.get());
+  std::unique_ptr<StructCompiler> scomp =
+      StructCompiler::make(this, host_arch());
+  scomp->run(*snode_root, true);
+  materialize_snode_expr_attributes();
+
+  for (auto snode : scomp->snodes) {
+    snodes[snode->id] = snode;
+  }
+
+  TI_TRACE("materialize_layout called");
+  if (config.arch == Arch::cuda) {
+    std::unique_ptr<StructCompiler> scomp_gpu =
+        StructCompiler::make(this, Arch::cuda);
+    scomp_gpu->run(*snode_root, false);
   }
 }
 
 void Program::materialize_layout() {
   // always use host_arch() this is for host accessors
+  SNodePropertiesInferrer snode_props_inferrer{&visited_snodes_cache_};
+  snode_props_inferrer.infer(snode_root.get());
   std::unique_ptr<StructCompiler> scomp =
       StructCompiler::make(this, host_arch());
   scomp->run(*snode_root, true);
@@ -744,8 +770,8 @@ void Program::finalize() {
       ofs << stat_string;
     }
   }
-  if (runtime)
-    runtime->set_profiler(nullptr);
+  if (runtime_info)
+    runtime_info->set_profiler(nullptr);
   synchronize();
   current_program = nullptr;
   memory_pool->terminate();

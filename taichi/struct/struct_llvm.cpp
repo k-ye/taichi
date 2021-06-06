@@ -2,6 +2,7 @@
 
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/TypeFinder.h"
 
 #include "taichi/ir/ir.h"
 #include "taichi/struct/struct.h"
@@ -10,6 +11,9 @@
 
 namespace taichi {
 namespace lang {
+namespace {
+static int root_re_jit_count = 0;
+}
 
 StructCompilerLLVM::StructCompilerLLVM(Arch arch,
                                        const CompileConfig *config,
@@ -27,7 +31,7 @@ StructCompilerLLVM::StructCompilerLLVM(Arch arch, Program *prog)
 
 void StructCompilerLLVM::generate_types(SNode &snode) {
   TI_AUTO_PROF;
-  auto type = snode.type;
+  const auto type = snode.type;
   if (snode.is_bit_level)
     return;
   llvm::Type *node_type = nullptr;
@@ -45,13 +49,18 @@ void StructCompilerLLVM::generate_types(SNode &snode) {
       ch_types.push_back(ch);
     }
   }
-
+  std::string snode_type_name_base = snode.node_type_name;
+  if (type == SNodeType::root) {
+    ++root_re_jit_count;
+    snode_type_name_base += fmt::format("_jit{}", root_re_jit_count);
+  }
   auto ch_type =
-      llvm::StructType::create(*ctx, ch_types, snode.node_type_name + "_ch");
+      llvm::StructType::create(*ctx, ch_types, snode_type_name_base + "_ch");
 
   snode.cell_size_bytes = tlctx_->get_type_size(ch_type);
 
-  llvm::Type *body_type = nullptr, *aux_type = nullptr;
+  llvm::Type *body_type = nullptr;
+  llvm::Type *aux_type = nullptr;
   if (type == SNodeType::dense || type == SNodeType::bitmasked) {
     TI_ASSERT(snode._morton == false);
     body_type = llvm::ArrayType::get(ch_type, snode.max_num_elements());
@@ -152,6 +161,18 @@ void StructCompilerLLVM::generate_types(SNode &snode) {
        ch_type},
       type_stub_name(&snode));
 
+  // std::cerr << "node_type\n";
+  // node_type->print(llvm::errs());
+  // std::cerr << std::endl;
+  // std::cerr << "body_type\n";
+  // body_type->print(llvm::errs());
+  // std::cerr << std::endl;
+  // std::cerr << "ch_type\n";
+  // ch_type->print(llvm::errs());
+  // std::cerr << std::endl;
+  // std::cerr << "stub_type\n";
+  // stub->print(llvm::errs());
+  // std::cerr << std::endl << std::endl;
   // Create a dummy function in the module with the type stub as return type
   // so that the type is referenced in the module
   auto ft = llvm::FunctionType::get(llvm::PointerType::get(stub, 0), false);
@@ -209,7 +230,7 @@ void StructCompilerLLVM::generate_child_accessors(SNode &snode) {
   auto type = snode.type;
   stack.push_back(&snode);
 
-  bool is_leaf = type == SNodeType::place;
+  const bool is_leaf = (type == SNodeType::place);
 
   if (!is_leaf) {
     generate_refine_coordinates(&snode);
@@ -219,8 +240,12 @@ void StructCompilerLLVM::generate_child_accessors(SNode &snode) {
     // create the get ch function
     auto parent = snode.parent;
 
-    auto inp_type =
+    auto *inp_type =
         llvm::PointerType::get(get_llvm_element_type(module.get(), parent), 0);
+    TI_INFO("SNode={} type={}", snode.id, snode.get_node_type_name_hinted());
+    // inp_type->print(llvm::errs());
+    // std::cerr << std::endl;
+    inp_type->dump();
 
     auto ft =
         llvm::FunctionType::get(llvm::Type::getInt8PtrTy(*llvm_ctx_),
@@ -239,25 +264,44 @@ void StructCompilerLLVM::generate_child_accessors(SNode &snode) {
       args.push_back(&arg);
     }
     llvm::Value *ret;
-    ret = builder.CreateGEP(builder.CreateBitCast(args[0], inp_type),
+    TI_INFO("  >> SNode={} GEP before, id_in_parent={}", snode.id,
+            parent->child_id(&snode));
+
+    auto *cast_val = builder.CreateBitCast(args[0], inp_type);
+    llvm::cast<llvm::PointerType>(cast_val->getType()->getScalarType())
+        ->getElementType()
+        ->dump();
+    // GEP's cast type |inp_ty| is from the LLVMContext, not |module|! If a
+    // struct is JIT compiled multiple times with the same name, only the
+    // *first* one counts. This is a problem for root type, because its type
+    // has to be re-compiled. If we cannot distinguish and only use the
+    // first-ever compiled root type, GEF cannot find the new fields.
+    // Discovered the above by dumping the cast type:
+    // https://github.com/llvm/llvm-project/blob/478dc47292b2edfda25c9a3664b60b7ca8c55372/llvm/include/llvm/IR/Instructions.h#L962-L968
+    ret = builder.CreateGEP(cast_val,
                             {tlctx_->get_constant(0),
                              tlctx_->get_constant(parent->child_id(&snode))},
                             "getch");
-
+    TI_INFO("  << SNode={} GEP after", snode.id);
     builder.CreateRet(
         builder.CreateBitCast(ret, llvm::Type::getInt8PtrTy(*llvm_ctx_)));
   }
 
   for (auto &ch : snode.ch) {
-    if (!ch->is_bit_level)
+    if (!ch->is_bit_level) {
       generate_child_accessors(*ch);
+    }
   }
 
   stack.pop_back();
 }
 
 std::string StructCompilerLLVM::type_stub_name(SNode *snode) {
-  return snode->node_type_name + "_type_stubs";
+  std::string jit;
+  if (snode->type == SNodeType::root) {
+    jit = fmt::format("_jit{}", root_re_jit_count);
+  }
+  return snode->node_type_name + jit + "_type_stubs";
 }
 
 void StructCompilerLLVM::run(SNode &root, bool host) {
@@ -265,16 +309,12 @@ void StructCompilerLLVM::run(SNode &root, bool host) {
   // bottom to top
   collect_snodes(root);
 
-  if (host) {
-    infer_snode_properties(root);
-    // compute_trailing_bits(root);
-  }
-
   auto snodes_rev = snodes;
   std::reverse(snodes_rev.begin(), snodes_rev.end());
 
-  for (auto &n : snodes_rev)
+  for (auto &n : snodes_rev) {
     generate_types(*n);
+  }
 
   generate_child_accessors(root);
 

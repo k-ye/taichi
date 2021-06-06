@@ -10,7 +10,6 @@ class StructCompiler {
  public:
   std::vector<SNode *> stack;
   std::vector<SNode *> snodes;
-  std::vector<SNode *> ambient_snodes;
   std::size_t root_size{0};
 
   virtual ~StructCompiler() = default;
