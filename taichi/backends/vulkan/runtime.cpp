@@ -12,7 +12,9 @@
 #include <unordered_set>
 #include <vector>
 
+#include "taichi/util/environ_config.h"
 #include "taichi/backends/vulkan/vulkan_api.h"
+#include "taichi/backends/vulkan/vulkan_common.h"
 #include "taichi/backends/vulkan/vulkan_simple_memory_pool.h"
 
 #include "taichi/math/arithmetic.h"
@@ -189,7 +191,7 @@ class CompiledTaichiKernel {
     const auto &spirv_bins = ti_params.spirv_bins;
     TI_ASSERT(task_attribs.size() == spirv_bins.size());
 
-    VulkanCommandBuilder cmd_builder(ti_params.device);
+    VulkanComputeCommandBuilder cmd_builder(ti_params.device);
     for (int i = 0; i < task_attribs.size(); ++i) {
       const auto &attribs = task_attribs[i];
       VulkanPipeline::Params vp_params;
@@ -216,7 +218,7 @@ class CompiledTaichiKernel {
     return vk_pipelines_.size();
   }
 
-  VkBufferWithMemory* ctx_buffer() const {
+  VkBufferWithMemory *ctx_buffer() const {
     return ctx_buffer_.get();
   }
 
@@ -241,13 +243,26 @@ class CompiledTaichiKernel {
   VkCommandBuffer command_buffer_{VK_NULL_HANDLE};
 };
 
+class ClearBufferCommandBuilder : private VulkanCommandBuilder {
+ public:
+  using VulkanCommandBuilder::VulkanCommandBuilder;
+
+  VkCommandBuffer build(const std::vector<VkBuffer> &buffers) {
+    for (auto b : buffers) {
+      vkCmdFillBuffer(command_buffer_, b, /*dstOffset=*/0,
+                      /*size=*/VK_WHOLE_SIZE,
+                      /*data=*/0);
+    }
+    return VulkanCommandBuilder::build();
+  }
+};
+
 }  // namespace
 
 class VkRuntime ::Impl {
  public:
   explicit Impl(const Params &params)
-      : config_(params.config),
-        snode_descriptors_(params.snode_descriptors),
+      : snode_descriptors_(params.snode_descriptors),
         host_result_buffer_(params.host_result_buffer),
         spv_compiler_([](const std::string &glsl_src,
                          const std::string &shader_name,
@@ -255,7 +270,6 @@ class VkRuntime ::Impl {
           TI_ERROR("Failed to compile shader={} err={}\n{}", shader_name,
                    err_msg, glsl_src);
         }) {
-    TI_ASSERT(config_ != nullptr);
     TI_ASSERT(snode_descriptors_ != nullptr);
     TI_ASSERT(host_result_buffer_ != nullptr);
     VulkanDevice::Params vd_params;
@@ -293,8 +307,8 @@ class VkRuntime ::Impl {
       auto spv_bin = spv_compiler_.compile(glsl_src, task_name).value();
       // If we can reach here, we have succeeded. Otherwise
       // std::optional::value() would have killed us.
-      TI_INFO("Successfully compiled GLSL -> SPIR-V for task={}\n{}", task_name,
-              glsl_src);
+      TI_TRACE("Successfully compiled GLSL -> SPIR-V for task={}\n{}",
+               task_name, glsl_src);
       params.spirv_bins.push_back(std::move(spv_bin));
     }
     KernelHandle res;
@@ -330,7 +344,7 @@ class VkRuntime ::Impl {
     StopWatch sw;
     stream_->synchronize();
     TI_DEBUG("running {} kernels took {} us", num_pending_kernels_,
-            sw.GetMicros());
+             sw.GetMicros());
     num_pending_kernels_ = 0;
   }
 
@@ -373,9 +387,15 @@ class VkRuntime ::Impl {
 #pragma message("Vulkan buffers size hardcoded")
     root_buffer_ = dev_local_memory_pool_->alloc_and_bind(16 * 1024 * 1024);
     global_tmps_buffer_ = dev_local_memory_pool_->alloc_and_bind(1024 * 1024);
+
+    // Need to zero fill the buffers, otherwise there could be NaN.
+    ClearBufferCommandBuilder cmd_builder{stream_->device()};
+    auto clear_cmd = cmd_builder.build(
+        /*buffers=*/{root_buffer_->buffer(), global_tmps_buffer_->buffer()});
+    stream_->launch(clear_cmd);
+    stream_->synchronize();
   }
 
-  const CompileConfig *const config_;
   const SNodeDescriptorsMap *const snode_descriptors_;
   uint64_t *const host_result_buffer_;
 

@@ -20,7 +20,6 @@ class VkRuntime {
  public:
   struct Params {
     // CompiledSNodeStructs compiled_snode_structs;
-    const CompileConfig *config = nullptr;
     uint64_t *host_result_buffer = nullptr;
     // int root_id;
     const SNodeDescriptorsMap *snode_descriptors = nullptr;

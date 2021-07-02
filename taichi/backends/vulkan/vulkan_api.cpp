@@ -467,8 +467,16 @@ VulkanCommandBuilder::~VulkanCommandBuilder() {
   }
 }
 
-void VulkanCommandBuilder::append(const VulkanPipeline &pipeline,
-                                  int group_count_x) {
+VkCommandBuffer VulkanCommandBuilder::build() {
+  BAIL_ON_VK_BAD_RESULT(vkEndCommandBuffer(command_buffer_),
+                        "failed to record command buffer");
+  VkCommandBuffer res = command_buffer_;
+  command_buffer_ = VK_NULL_HANDLE;
+  return res;
+}
+
+void VulkanComputeCommandBuilder::append(const VulkanPipeline &pipeline,
+                                         int group_count_x) {
   vkCmdBindPipeline(command_buffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
                     pipeline.pipeline());
   vkCmdBindDescriptorSets(
@@ -498,14 +506,6 @@ void VulkanCommandBuilder::append(const VulkanPipeline &pipeline,
                        /*pBufferMemoryBarriers=*/nullptr,
                        /*imageMemoryBarrierCount=*/0,
                        /*pImageMemoryBarriers=*/nullptr);
-}
-
-VkCommandBuffer VulkanCommandBuilder::build() {
-  BAIL_ON_VK_BAD_RESULT(vkEndCommandBuffer(command_buffer_),
-                        "failed to record command buffer");
-  VkCommandBuffer res = command_buffer_;
-  command_buffer_ = VK_NULL_HANDLE;
-  return res;
 }
 
 VkCommandBuffer record_copy_buffer_command(

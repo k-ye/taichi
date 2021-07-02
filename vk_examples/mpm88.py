@@ -86,7 +86,7 @@ def init():
         # x[i] = [ti.random() * 0.4 + 0.2, ti.random() * 0.4 + 0.2]
         v[i] = [0, -1]
         J[i] = 1
-        C[i] = ti.Matrix([[0, 0], [0, 0]])
+        # C[i] = ti.Matrix([[0, 0], [0, 0]])
 
 
 init()

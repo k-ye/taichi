@@ -145,15 +145,20 @@ class VulkanCommandBuilder {
 
   ~VulkanCommandBuilder();
 
-  void append(const VulkanPipeline &pipeline, int group_count_x);
-
   VkCommandBuffer build();
 
- private:
+ protected:
   // VkCommandBuffers are destroyed when the underlying command pool is
   // destroyed.
   // https://vulkan-tutorial.com/Drawing_a_triangle/Drawing/Command_buffers#page_Command-buffer-allocation
   VkCommandBuffer command_buffer_{VK_NULL_HANDLE};
+};
+
+class VulkanComputeCommandBuilder : public VulkanCommandBuilder {
+ public:
+  using VulkanCommandBuilder::VulkanCommandBuilder;
+
+  void append(const VulkanPipeline &pipeline, int group_count_x);
 };
 
 enum class VulkanCopyBufferDirection {
@@ -178,6 +183,10 @@ class VulkanStream {
 
   void launch(VkCommandBuffer command);
   void synchronize();
+
+  const VulkanDevice *device() const {
+    return device_;
+  }
 
  private:
   const VulkanDevice *const device_;
