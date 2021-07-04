@@ -33,3 +33,15 @@ $ python3 vk_examples/mpm88.py
 ```
 
 [vulkan-branch]: https://github.com/k-ye/taichi/tree/vk-stable-compact
+
+# Possible AOT Interface
+
+```cpp
+taichi::vulkan::Program prog{"/path/to/aot.tic"};
+
+auto foo = prog.get_kernel("foo");
+foo.Run();
+
+auto bar_tp = prog.get_kernel_template("bar");
+bar_tp.Run(/*template_args=*/{ taichi::vulkan::TemplateArg{"x", 1} });
+```
